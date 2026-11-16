@@ -12,13 +12,99 @@ A local test target for the UiPath Test Manager project **ACA** ("CCIIO ACA heal
 
 All names, issuers, plans and people are fictional. No npm packages are needed.
 
-## Run
+## Install and run
 
-Requires Node.js 22.13+ (it uses the built-in `node:sqlite`; Node 24 is installed on this machine).
+### Prerequisites
+
+| Requirement | Version | Install (Windows) |
+|---|---|---|
+| Node.js | 22.13 or later (24 LTS recommended) | `winget install OpenJS.NodeJS.LTS` or https://nodejs.org |
+| Git | any recent version | `winget install --id Git.Git -e` or https://git-scm.com/download/win |
+| GitHub access | read access to this private repo | Ask the repo owner to add you as a collaborator |
+
+No `npm install` step is needed: the app has no package dependencies, and the database uses SQLite built into Node.
+Open a **new** terminal after installing Node or Git so they are on your PATH, then check:
+
+```
+node --version      # must be v22.13.0 or higher
+git --version
+```
+
+### 1. Get the code
+
+```
+git clone https://github.com/UiPathBratlien/aca-marketplace-sim.git
+cd aca-marketplace-sim
+```
+
+The first clone opens a browser window to sign in to GitHub, because the repo is private.
+If you don't have Git, use **Code → Download ZIP** on the GitHub page and extract it instead.
+
+### 2. Start the app
 
 ```
 start.cmd            # or: npm start
 ```
+
+On first start the app creates `data\aca.db` and fills it with the sample data. The console prints the URLs and the database path.
+Leave the window open while you test. Press **Ctrl+C** to stop.
+
+### 3. Check it works
+
+- Open http://localhost:3000 in a browser, or http://localhost:3000/api/health for a JSON status.
+- Optionally run the self-test, which walks every step of ACA:151–160 against a throwaway database:
+  ```
+  npm run smoke      # expect: "168 checks passed, 0 failed"
+  ```
+
+### 4. (Optional) Let robots on other machines reach it
+
+By default the app accepts connections from the local machine only. To serve other machines:
+
+```
+set HOST=0.0.0.0
+start.cmd
+```
+
+Allow the port through Windows Firewall (run as administrator):
+
+```
+netsh advfirewall firewall add rule name="ACA test app" dir=in action=allow protocol=TCP localport=3000
+```
+
+Tests then use `http://<app-machine-name>:3000` instead of `localhost`.
+
+### Configuration
+
+Set these in the terminal before running `start.cmd`, e.g. `set PORT=8080`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `3000` | Port to listen on |
+| `HOST` | `127.0.0.1` | Use `0.0.0.0` to accept connections from other machines |
+| `ACA_DB_PATH` | `data\aca.db` | Database location; move it out of OneDrive or a network share if file locking causes trouble |
+| `ACA_RESET_ON_START` | off | `1` reloads the sample data every time the app starts |
+
+### Updating
+
+```
+git pull
+```
+
+Then restart the app. If the database schema changed, reset the data: click **Reset Test Data** on `/exchange/admin`, run `npm run reset` while the app is stopped, or delete `data\aca.db`.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `'node' is not recognized` | Install Node.js, then open a new terminal |
+| `No such built-in module: node:sqlite` or a `--disable-warning` error | Node is too old; install 22.13 or later |
+| `EADDRINUSE` | Port 3000 is taken; `set PORT=3001` or stop the other process |
+| Another machine can't connect | Start with `HOST=0.0.0.0` and add the firewall rule above |
+| `database is locked` | Move the DB with `ACA_DB_PATH` to a local, non-synced folder |
+| Reconsideration and data-inaccuracy deadlines look wrong | They count from today's date; check the machine's clock |
+
+## URLs
 
 | URL | What |
 |---|---|
@@ -26,9 +112,6 @@ start.cmd            # or: npm start
 | http://localhost:3000/exchange | Exchange certification portal |
 | http://localhost:3000/exchange/admin | Reset test data, table counts, seeded accounts |
 | http://localhost:3000/api | JSON API index |
-
-Environment options: `PORT`, `ACA_DB_PATH` (move the DB out of OneDrive if file locking becomes a problem),
-`ACA_RESET_ON_START=1` (reseed at every start).
 
 Seeded logins (password `Password123!` for all): `jane.consumer@example.com`, `sam.filer@example.com`, `reviewer@exchange.test`.
 
