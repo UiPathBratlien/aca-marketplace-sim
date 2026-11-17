@@ -54,7 +54,7 @@ Leave the window open while you test. Press **Ctrl+C** to stop.
 - Open http://localhost:3000 in a browser, or http://localhost:3000/api/health for a JSON status.
 - Optionally run the self-test, which walks every step of ACA:151–160 against a throwaway database:
   ```
-  npm run smoke      # expect: "168 checks passed, 0 failed"
+  npm run smoke      # expect: "178 checks passed, 0 failed"
   ```
 
 ### 4. (Optional) Let robots on other machines reach it
@@ -119,7 +119,7 @@ Seeded logins (password `Password123!` for all): `jane.consumer@example.com`, `s
 but for a clean baseline click **Reset Test Data** or call `POST /api/admin/reset` (for example from an HTTP Request
 activity in a test's setup).
 
-Self-test: `npm run smoke` runs every ACA:151–160 step over HTTP against a throwaway database (168 checks).
+Self-test: `npm run smoke` runs every ACA:151–160 step over HTTP against a throwaway database (178 checks).
 
 ## Test case → navigation map (requirement ACA:42)
 
