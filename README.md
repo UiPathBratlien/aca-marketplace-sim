@@ -166,8 +166,20 @@ Each rule is available in the UI at `/exchange/tools/<id>` and as an API at `GET
 | ACA:18 aggregated QIS reporting | QIS Public Report; `/api/qis-report` |
 | ACA:19 exchange user fee | `exchange-user-fee` (reads `enhanced_ptc_extended_2026`) |
 | ACA:20, 47 CSR loading · ACA:21 AV calculator | `csr-loading`, `av-calculator` |
-| ACA:22, 45 standardized designs · ACA:46 meaningful difference · ACA:23 non-standard limits | `standardized-design`, `meaningful-difference`, `nonstandard-limit` (seeded duplicate and over-limit plans) |
+| ACA:22, 45 standardized designs · ACA:46 meaningful difference · ACA:23 non-standard limits | `standardized-design`, `meaningful-difference`, `standardized-plan-compliance` (both rules), `nonstandard-limit` (seeded duplicate and over-limit plans) |
 | ACA:24, 48 MLR qualifying issuer | `mlr-qualifying` |
+
+### Standardized plan options by plan year (ACA:22, 45, 46)
+
+| Plan year | Source | Standard silver (deductible / OOP limit) | Expanded bronze (deductible / OOP limit) | Meaningful difference |
+|---|---|---|---|---|
+| 2025 | 2025 Payment Notice, 89 FR 26358–59 (PDF pp.141–42) | $5,000 / $8,000 | $7,500 / $9,200 (50% coinsurance) | No explicit rule |
+| 2026 | 2026 Payment Notice, 90 FR 4493–4500 (PDF pp.70–77) | $6,000 / $8,900 | $7,500 / $10,000 (50% coinsurance) | 45 CFR 156.201(c), 90 FR 4541 (PDF p.118): standardized plans from one issuer with the same network type, metal level and service area must differ by product, network, drug list or benefits |
+
+A PY2026 standardized plan must pass both rules; `standardized-plan-compliance` checks a plan's cost sharing against its
+year's table and compares it with the issuer's other standardized plans. Seeded examples: `10101TX0070001` (PY2026
+duplicate, fails 156.201(c)), `10101TX0080001` (different network, passes), and PY2025 plans `10101TX0032025`,
+`10101TX0072025` (identical but allowed in 2025) and `10101TX0022025` (expanded bronze).
 
 ## Database for data tests
 

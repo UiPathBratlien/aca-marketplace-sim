@@ -267,6 +267,17 @@ function seed() {
   extra({ id: '10101TX0080001', issuer_id: 1, name: 'Bluebonnet Silver HMO Standard Select Network', metal: 'Silver', plan_type: 'HMO',
     standardized: 1, standardized_design: 'Standardized Silver', product_id: '10101TX001', network_id: 'TXN901', drug_list_id: 'TXD001',
     deductible: 6000, moop: 8900, coinsurance: 40, base_premium: 341, actuarial_value: 0.70 }, countiesByState.TX);
+  // PY2025 standardized plans (2025 Payment Notice, 89 FR 26358–59): silver $5,000/$8,000, expanded bronze $7,500/$9,200.
+  // The two silvers are identical, which PY2025 allowed (no meaningful-difference rule until 45 CFR 156.201(c) for PY2026).
+  extra({ id: '10101TX0032025', plan_year: 2025, issuer_id: 1, name: 'Bluebonnet Silver HMO Standard (PY2025)', metal: 'Silver', plan_type: 'HMO',
+    standardized: 1, standardized_design: 'Standardized Silver', product_id: '10101TX001', network_id: 'TXN001', drug_list_id: 'TXD001',
+    deductible: 5000, moop: 8000, coinsurance: 40, base_premium: 338, actuarial_value: 0.70 }, countiesByState.TX);
+  extra({ id: '10101TX0072025', plan_year: 2025, issuer_id: 1, name: 'Bluebonnet Silver HMO Standard Plus (PY2025)', metal: 'Silver', plan_type: 'HMO',
+    standardized: 1, standardized_design: 'Standardized Silver', product_id: '10101TX001', network_id: 'TXN001', drug_list_id: 'TXD001',
+    deductible: 5000, moop: 8000, coinsurance: 40, base_premium: 340, actuarial_value: 0.70 }, countiesByState.TX);
+  extra({ id: '10101TX0022025', plan_year: 2025, issuer_id: 1, name: 'Bluebonnet Exp. Bronze HMO Standard (PY2025)', metal: 'Expanded Bronze', plan_type: 'HMO',
+    standardized: 1, standardized_design: 'Standardized Expanded Bronze', product_id: '10101TX001', network_id: 'TXN001', drug_list_id: 'TXD001',
+    deductible: 7500, moop: 9200, coinsurance: 50, base_premium: 270, actuarial_value: 0.645 }, countiesByState.TX);
   // Gulf Prairie: three non-standardized Gold PPO plans, same service area, no dental/vision -> exceeds 2-plan limit
   ['A', 'B', 'C'].forEach((s, i) => extra({ id: `10202TX01${i}0001`, issuer_id: 2, name: `Gulf Gold PPO Choice ${s}`, metal: 'Gold', plan_type: 'PPO',
     standardized: 0, product_id: '10202TX002', network_id: 'TXN002', drug_list_id: 'TXD002', deductible: 1000 + i * 250, moop: 7500,

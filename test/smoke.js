@@ -151,6 +151,17 @@ async function main() {
     ok((await rule('radv-appeal-rerun', { benefitYear: '2024', impact: '9999' })).result.rerun === false, 'rerun threshold');
     ok((await rule('exchange-user-fee', { benefitYear: '2026', exchangeType: 'FFE', extended: 'no', premium: '100' })).result.rate === 0.025, 'user fee');
     ok((await rule('meaningful-difference', { planA: '10101TX0030001', planB: '10101TX0070001' })).result.compliant === false, 'duplicate std plan rejected');
+    ok((await rule('meaningful-difference', { planA: '10101TX0030001', planB: '10101TX0070001', planYear: '2025' })).result.applies === false, 'no meaningful-difference rule in PY2025');
+    const sd = async q => (await rule('standardized-design', q)).result;
+    ok((await sd({ planYear: '2025', design: 'silver', deductible: '5000', moop: '8000' })).compliant === true, 'PY2025 silver $5,000/$8,000');
+    ok((await sd({ planYear: '2025', design: 'expanded_bronze', deductible: '7500', moop: '9200', coinsurance: '50' })).compliant === true, 'PY2025 expanded bronze $7,500/$9,200');
+    ok((await sd({ planYear: '2026', design: 'silver', deductible: '6000', moop: '8900' })).compliant === true, 'PY2026 silver $6,000/$8,900');
+    ok((await sd({ planYear: '2026', design: 'expanded_bronze', deductible: '7500', moop: '10000', coinsurance: '50' })).compliant === true, 'PY2026 expanded bronze $7,500/$10,000');
+    ok((await sd({ planYear: '2026', design: 'silver', deductible: '5000', moop: '8000' })).compliant === false, 'PY2025 values rejected for PY2026');
+    ok((await rule('standardized-plan-compliance', { plan: '10101TX0070001' })).result.duplicates.includes('10101TX0030001'), 'both rules: duplicate fails 156.201(c)');
+    ok((await rule('standardized-plan-compliance', { plan: '10101TX0080001' })).result.compliant === true, 'both rules: different network passes');
+    ok((await rule('standardized-plan-compliance', { plan: '10101TX0072025' })).result.compliant === true, 'PY2025 identical plans allowed (no 156.201(c))');
+    ok((await rule('standardized-plan-compliance', { plan: '10101TX0022025' })).result.compliant === true, 'PY2025 expanded bronze seed compliant');
     ok((await rule('nonstandard-limit', { issuer: '2', planYear: '2026' })).result.compliant === false, 'nonstandard limit exceeded');
     ok((await rule('ecp-review', { state: 'OH', planYear: '2026', productType: 'medical' })).result.reviewer.startsWith('HHS'), 'ecp review HHS');
     ok((await rule('premium-threshold', { issuer: '2', paymentType: 'binder', grossPremium: '600', aptc: '400', amountPaid: '195' })).result.sufficient === false, 'binder excludes gross/fixed');

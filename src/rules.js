@@ -27,6 +27,16 @@ function daysBetween(a, b) {
   return Math.round((dbb - da) / 86400000);
 }
 const today = () => new Date().toISOString().slice(0, 10);
+// Standardized plan options by plan year (ACA:22, 45, 46).
+//  PY2025: 2025 Payment Notice, 89 FR 26358–59 (PDF pp.141–42) — no explicit meaningful-difference rule.
+//  PY2026: 2026 Payment Notice, 90 FR 4493–4500 (PDF pp.70–77) — adds 45 CFR 156.201(c), 90 FR 4541 (PDF p.118).
+const MEANINGFUL_DIFFERENCE_CITE = '45 CFR 156.201(c); 90 FR 4541';
+const STANDARDIZED_DESIGNS = {
+  2025: { source: '89 FR 26358–59', meaningfulDifference: false,
+    silver: { ded: 5000, moop: 8000 }, expanded_bronze: { ded: 7500, moop: 9200, coins: 50 } },
+  2026: { source: '90 FR 4493–4500', meaningfulDifference: true,
+    silver: { ded: 6000, moop: 8900 }, expanded_bronze: { ded: 7500, moop: 10000, coins: 50 } },
+};
 const reqDate = (v, name) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v || ''))) throw new RuleError(`${name} must be a date (YYYY-MM-DD).`); return v; };
 
 // ---------- Shared rule functions (also used by workflow pages) ----------
@@ -179,33 +189,49 @@ const rules = {
   },
 
   standardizedDesign(planYear, design, deductible, moop, coinsurance) {
-    const tables = {
-      2025: { silver: { ded: 5000, moop: 8000 }, expanded_bronze: { ded: 7500, moop: 9200, coins: 50 } },
-      2026: { silver: { ded: 6000, moop: 8900 }, expanded_bronze: { ded: 7500, moop: 10000, coins: 50 } },
-    };
     const y = int(planYear, 'Plan year');
-    const t = tables[y] && tables[y][design];
+    const src = STANDARDIZED_DESIGNS[y];
+    const t = src && src[design];
     if (!t) throw new RuleError('Design tables are configured for standard silver and expanded bronze, plan years 2025–2026.');
     const issues = [];
     if (int(deductible, 'Deductible') !== t.ded) issues.push(`Deductible must be ${money(t.ded)}`);
     if (int(moop, 'MOOP') !== t.moop) issues.push(`Annual limitation on cost sharing must be ${money(t.moop)}`);
     if (t.coins && coinsurance !== '' && coinsurance != null && int(coinsurance, 'Coinsurance') !== t.coins) issues.push(`Coinsurance must be ${t.coins}%`);
-    return { compliant: issues.length === 0, issues, table: t };
+    return { compliant: issues.length === 0, issues, table: t, source: src.source, meaningfulDifferenceRule: src.meaningfulDifference };
   },
 
-  meaningfulDifference(a, b) {
+  meaningfulDifference(a, b, planYear) {
     if (!a || !b) throw new RuleError('Select two plans.');
     if (a.id === b.id) throw new RuleError('Select two different plans.');
+    const y = planYear === '' || planYear == null ? a.plan_year : int(planYear, 'Plan year');
+    const src = STANDARDIZED_DESIGNS[y] || STANDARDIZED_DESIGNS[y < 2025 ? 2025 : 2026];
+    if (!src.meaningfulDifference) return { applies: false, compliant: true, differences: [], planYear: y, source: src.source,
+      reason: `The PY${y} rule (${src.source}) has no explicit meaningful-difference requirement for standardized plans; 45 CFR 156.201(c) applies beginning PY2026.` };
     const areaA = D.all('SELECT county_fips FROM plan_service_areas WHERE plan_id = ? ORDER BY 1', a.id).map(r => r.county_fips).join(',');
     const areaB = D.all('SELECT county_fips FROM plan_service_areas WHERE plan_id = ? ORDER BY 1', b.id).map(r => r.county_fips).join(',');
     const sameScope = a.issuer_id === b.issuer_id && a.plan_type === b.plan_type && a.metal === b.metal && areaA === areaB && a.standardized && b.standardized;
-    if (!sameScope) return { applies: false, compliant: true, differences: [], reason: 'Rule applies only to multiple standardized plans from the same issuer with the same network type, metal level and service area.' };
+    if (!sameScope) return { applies: false, compliant: true, differences: [], planYear: y, source: MEANINGFUL_DIFFERENCE_CITE, reason: 'Rule applies only to multiple standardized plans from the same issuer with the same network type, metal level and service area.' };
     const differences = [];
     if (a.product_id !== b.product_id) differences.push('Product ID');
     if (a.network_id !== b.network_id) differences.push('Network ID');
     if (a.drug_list_id !== b.drug_list_id) differences.push('Drug list ID');
     if (a.adult_dental !== b.adult_dental || a.adult_vision !== b.adult_vision || a.pediatric_dental !== b.pediatric_dental) differences.push('Benefits');
-    return { applies: true, compliant: differences.length > 0, differences, reason: differences.length ? 'Plans are meaningfully different.' : 'Plans are not meaningfully different — reject duplicate standardized offering (45 CFR 156.201(c)).' };
+    return { applies: true, compliant: differences.length > 0, differences, planYear: y, source: MEANINGFUL_DIFFERENCE_CITE, reason: differences.length ? 'Plans are meaningfully different.' : 'Plans are not meaningfully different — reject duplicate standardized offering (45 CFR 156.201(c)).' };
+  },
+
+  // Applies both rules for the plan's year: the standardized design table and, from PY2026, 156.201(c).
+  standardizedPlanCompliance(plan) {
+    if (!plan) throw new RuleError('Select a plan.');
+    if (!plan.standardized) throw new RuleError(`${plan.id} is not a standardized plan.`);
+    const design = plan.metal === 'Expanded Bronze' ? 'expanded_bronze' : (plan.metal === 'Silver' ? 'silver' : null);
+    if (!design) throw new RuleError(`No standardized design table is configured for ${plan.metal} plans (standard silver and expanded bronze only).`);
+    const designCheck = rules.standardizedDesign(plan.plan_year, design, plan.deductible, plan.moop, plan.coinsurance);
+    const peers = D.all('SELECT * FROM plans WHERE issuer_id = ? AND plan_year = ? AND standardized = 1 AND id <> ? ORDER BY id', plan.issuer_id, plan.plan_year, plan.id);
+    const comparisons = peers.map(p => ({ planId: p.id, ...rules.meaningfulDifference(plan, p, plan.plan_year) })).filter(c => c.applies);
+    const duplicates = comparisons.filter(c => !c.compliant).map(c => c.planId);
+    const issues = [...designCheck.issues, ...duplicates.map(id => `Not meaningfully different from ${id} (45 CFR 156.201(c))`)];
+    return { planId: plan.id, planYear: plan.plan_year, design, compliant: issues.length === 0, issues, designCheck, comparisons, duplicates,
+      meaningfulDifferenceRule: designCheck.meaningfulDifferenceRule };
   },
 
   nonstandardLimit(issuerId, planYear) {
@@ -312,16 +338,27 @@ const TOOLS = [
     run: i => { const y = int(i.planYear, 'Plan year'); const ok = y >= 2026 ? i.version === 'final' : true;
       return { outcome: ok ? 'Accepted' : 'Rejected — use the final AV Calculator', data: { accepted: ok },
         rows: [['Required version', y >= 2026 ? `Final ${y} AV Calculator (single release)` : 'Draft/final cycle'], ['Feedback', y >= 2026 ? `Feedback is ordinarily applied to PY ${y + 1}` : 'Feedback may revise current-year calculator'], ['Result', ok ? 'Accepted' : 'Rejected']] }; } },
-  { id: 'standardized-design', group: 'Plan Design', title: 'Standardized Plan Cost Sharing', reqs: ['ACA:22', 'ACA:45'], cite: '90 FR 4494–97',
+  { id: 'standardized-design', group: 'Plan Design', title: 'Standardized Plan Cost Sharing', reqs: ['ACA:22', 'ACA:45'], cite: 'PY2025: 89 FR 26358–59 · PY2026: 90 FR 4493–4500',
     inputs: [{ name: 'planYear', label: 'Plan year', type: 'number', value: '2026' }, { name: 'design', label: 'Standardized design', type: 'select', options: [['silver', 'Standard Silver'], ['expanded_bronze', 'Expanded Bronze']] },
       { name: 'deductible', label: 'Deductible ($)', type: 'number', value: '6000' }, { name: 'moop', label: 'Annual limitation on cost sharing ($)', type: 'number', value: '8900' }, { name: 'coinsurance', label: 'Coinsurance (%)', type: 'number', value: '' }],
     run: i => { const r = rules.standardizedDesign(i.planYear, i.design, i.deductible, i.moop, i.coinsurance);
-      return { outcome: r.compliant ? 'Design compliant' : 'Design non-compliant', data: r, rows: [['Result', r.compliant ? 'Compliant' : 'Non-compliant'], ['Required deductible', money(r.table.ded)], ['Required limit', money(r.table.moop)], ...r.issues.map(x => ['Issue', x])] }; } },
-  { id: 'meaningful-difference', group: 'Plan Design', title: 'Standardized Plan Meaningful Difference', reqs: ['ACA:22', 'ACA:46'], cite: '45 CFR 156.201(c)',
+      return { outcome: r.compliant ? 'Design compliant' : 'Design non-compliant', data: r, rows: [['Result', r.compliant ? 'Compliant' : 'Non-compliant'], ['Required deductible', money(r.table.ded)], ['Required limit', money(r.table.moop)],
+        ...(r.table.coins ? [['Required coinsurance', `${r.table.coins}%`]] : []), ['Source', r.source],
+        ['Meaningful-difference rule', r.meaningfulDifferenceRule ? `Also applies (${MEANINGFUL_DIFFERENCE_CITE})` : 'Not in this plan year\'s rule'], ...r.issues.map(x => ['Issue', x])] }; } },
+  { id: 'meaningful-difference', group: 'Plan Design', title: 'Standardized Plan Meaningful Difference', reqs: ['ACA:22', 'ACA:46'], cite: `${MEANINGFUL_DIFFERENCE_CITE} (PY2026+)`,
     inputs: [{ name: 'planA', label: 'Plan A', type: 'select', options: () => D.all('SELECT id, name FROM plans WHERE standardized = 1 ORDER BY id').map(p => [p.id, `${p.id} — ${p.name}`]) },
-      { name: 'planB', label: 'Plan B', type: 'select', options: () => D.all('SELECT id, name FROM plans WHERE standardized = 1 ORDER BY id').map(p => [p.id, `${p.id} — ${p.name}`]) }],
-    run: i => { const r = rules.meaningfulDifference(D.get('SELECT * FROM plans WHERE id = ?', i.planA), D.get('SELECT * FROM plans WHERE id = ?', i.planB));
-      return { outcome: !r.applies ? 'Rule not applicable' : (r.compliant ? 'Meaningfully different' : 'Not meaningfully different — reject'), data: r, rows: [['Result', r.reason], ['Differences', r.differences.join(', ') || 'None']] }; } },
+      { name: 'planB', label: 'Plan B', type: 'select', options: () => D.all('SELECT id, name FROM plans WHERE standardized = 1 ORDER BY id').map(p => [p.id, `${p.id} — ${p.name}`]) },
+      { name: 'planYear', label: 'Rule plan year (blank = plan A\'s year)', type: 'number', value: '' }],
+    run: i => { const r = rules.meaningfulDifference(D.get('SELECT * FROM plans WHERE id = ?', i.planA), D.get('SELECT * FROM plans WHERE id = ?', i.planB), i.planYear);
+      return { outcome: !r.applies ? 'Rule not applicable' : (r.compliant ? 'Meaningfully different' : 'Not meaningfully different — reject'), data: r,
+        rows: [['Result', r.reason], ['Plan year', String(r.planYear)], ['Differences', r.differences.join(', ') || 'None'], ['Source', r.source]] }; } },
+  { id: 'standardized-plan-compliance', group: 'Plan Design', title: 'Standardized Plan Compliance (both rules)', reqs: ['ACA:22', 'ACA:45', 'ACA:46'], cite: `90 FR 4493–4500; ${MEANINGFUL_DIFFERENCE_CITE}`,
+    inputs: [{ name: 'plan', label: 'Standardized plan', type: 'select', options: () => D.all('SELECT id, name FROM plans WHERE standardized = 1 ORDER BY id').map(p => [p.id, `${p.id} — ${p.name}`]) }],
+    run: i => { const r = rules.standardizedPlanCompliance(D.get('SELECT * FROM plans WHERE id = ?', i.plan));
+      return { outcome: r.compliant ? 'Compliant with both rules' : 'Non-compliant', data: r,
+        rows: [['Plan year', String(r.planYear)], ['Design check', `${r.designCheck.compliant ? 'Pass' : 'Fail'} (${r.designCheck.source})`],
+          ['Meaningful difference', !r.meaningfulDifferenceRule ? 'Not applicable to this plan year' : (r.comparisons.length === 0 ? 'Pass — no other standardized plan in the same network type, metal level and service area' : (r.duplicates.length ? 'Fail' : `Pass (compared with ${r.comparisons.map(c => c.planId).join(', ')})`))],
+          ...r.issues.map(x => ['Issue', x])] }; } },
   { id: 'nonstandard-limit', group: 'Plan Design', title: 'Non-standardized Plan Limit', reqs: ['ACA:23'], cite: '45 CFR 156.202',
     inputs: [{ name: 'issuer', label: 'Issuer', type: 'select', options: () => D.all('SELECT id, name FROM issuers ORDER BY name').map(r => [String(r.id), r.name]) }, { name: 'planYear', label: 'Plan year', type: 'number', value: '2026' }],
     run: i => { const r = rules.nonstandardLimit(Number(i.issuer), int(i.planYear, 'Plan year'));
