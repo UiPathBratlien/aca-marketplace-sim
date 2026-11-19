@@ -1,13 +1,16 @@
 # CoverWell Marketplace — ACA test application
 
-A local test target for the UiPath Test Manager project **ACA** ("CCIIO ACA healthcare.gov") and the
-`JOSGroupACA` Studio project. It has:
+A local test target for the UiPath Test Manager projects **ACA** ("CCIIO ACA healthcare.gov") and **BCA**
+(2025 edition changes to 45 CFR Parts 155 and 156), and the `JOSGroupACA` Studio project. It has:
 
 - **Consumer marketplace** (healthcare.gov-style): savings screener, plan browsing and comparison, accounts,
-  a multi-step 2026 application, eligibility (APTC / CSR / Medicaid), enrollment, binder and monthly payments,
-  appeals, and "find local help".
+  a multi-step 2026 or 2027 application, eligibility (APTC / CSR / Medicaid, lawful presence, income verification, FTR),
+  open enrollment, special enrollment periods, binder and monthly payments, appeals, and "find local help".
 - **Exchange QHP Certification Portal** (`/exchange`): the certification-denial workflow exercised by test cases
   ACA:151–160, plus reconsideration, agents and brokers, FTR notices, data-inaccuracy reports, the QIS report and rule tools.
+- **Enrollment & eligibility (2025 CFR)** (`/exchange/redetermination` and others): annual redetermination and passive
+  re-enrollment with the $5 minimum premium exercised by test cases BCA:40–49, 834 files, inconsistencies, special enrollment,
+  plan data validation and a **simulated system clock** used by every date rule.
 - **SQLite database** (`data/aca.db`) with seeded, fictional data, a reset button, and a JSON API for data tests.
 
 All names, issuers, plans and people are fictional. No npm packages are needed.
@@ -47,14 +50,17 @@ start.cmd            # or: npm start
 ```
 
 On first start the app creates `data\aca.db` and fills it with the sample data. The console prints the URLs and the database path.
+The system date starts at **2025-11-15** (simulated, shown in the top banner); change it on http://localhost:3000/exchange/clock.
 Leave the window open while you test. Press **Ctrl+C** to stop.
 
 ### 3. Check it works
 
 - Open http://localhost:3000 in a browser, or http://localhost:3000/api/health for a JSON status.
-- Optionally run the self-test, which walks every step of ACA:151–160 against a throwaway database:
+- Optionally run the self-tests against a throwaway database:
   ```
-  npm run smoke      # expect: "178 checks passed, 0 failed"
+  npm run smoke      # ACA:151–160            expect: "178 checks passed, 0 failed"
+  npm run smoke:bca  # BCA:40–49 + BCA rules  expect: "246 checks passed, 0 failed"
+  npm test           # both
   ```
 
 ### 4. (Optional) Let robots on other machines reach it
@@ -91,7 +97,8 @@ Set these in the terminal before running `start.cmd`, e.g. `set PORT=8080`.
 git pull
 ```
 
-Then restart the app. If the database schema changed, reset the data: click **Reset Test Data** on `/exchange/admin`, run `npm run reset` while the app is stopped, or delete `data\aca.db`.
+Then restart the app. When the schema version changes (as it did for the BCA update) the app resets the data on start by itself.
+To reset at any other time: click **Reset Test Data** on `/exchange/admin`, run `npm run reset` while the app is stopped, or delete `data\aca.db`.
 
 ### Troubleshooting
 
@@ -102,7 +109,7 @@ Then restart the app. If the database schema changed, reset the data: click **Re
 | `EADDRINUSE` | Port 3000 is taken; `set PORT=3001` or stop the other process |
 | Another machine can't connect | Start with `HOST=0.0.0.0` and add the firewall rule above |
 | `database is locked` | Move the DB with `ACA_DB_PATH` to a local, non-synced folder |
-| Reconsideration and data-inaccuracy deadlines look wrong | They count from today's date; check the machine's clock |
+| Dates, deadlines or "Open Enrollment is closed" look wrong | Every date rule uses the simulated system date (banner). Set it on `/exchange/clock`, or blank the `system_date` parameter for the real date |
 
 ## URLs
 
@@ -111,6 +118,9 @@ Then restart the app. If the database schema changed, reset the data: click **Re
 | http://localhost:3000/ | Consumer site |
 | http://localhost:3000/exchange | Exchange certification portal |
 | http://localhost:3000/exchange/admin | Reset test data, table counts, seeded accounts |
+| http://localhost:3000/exchange/redetermination | Annual redetermination and passive re-enrollment (BCA:40–49) |
+| http://localhost:3000/exchange/clock | Simulated system date |
+| http://localhost:3000/sep/new | Consumer special enrollment (after logging in and submitting an application) |
 | http://localhost:3000/api | JSON API index |
 
 Seeded logins (password `Password123!` for all): `jane.consumer@example.com`, `sam.filer@example.com`, `reviewer@exchange.test`.
@@ -119,7 +129,7 @@ Seeded logins (password `Password123!` for all): `jane.consumer@example.com`, `s
 but for a clean baseline click **Reset Test Data** or call `POST /api/admin/reset` (for example from an HTTP Request
 activity in a test's setup).
 
-Self-test: `npm run smoke` runs every ACA:151–160 step over HTTP against a throwaway database (178 checks).
+Self-tests: `npm run smoke` runs every ACA:151–160 step (178 checks); `npm run smoke:bca` runs every BCA:40–49 step plus the other BCA rules (246 checks).
 
 ## Test case → navigation map (requirement ACA:42)
 
@@ -181,6 +191,68 @@ year's table and compares it with the issuer's other standardized plans. Seeded 
 duplicate, fails 156.201(c)), `10101TX0080001` (different network, passes), and PY2025 plans `10101TX0032025`,
 `10101TX0072025` (identical but allowed in 2025) and `10101TX0022025` (expanded bronze).
 
+## 2025 CFR changes — Test Manager project BCA
+
+Project **BCA** holds 38 requirements (BCA:2–BCA:39) from the 2024 → 2025 editions of 45 CFR Parts 155 and 156.
+They are implemented in `src/bca.js` (rules), `src/routes/redetermination.js` and `src/routes/bca.js` (flows).
+Self-test: `npm run smoke:bca` (246 checks), or `npm test` for both suites.
+
+### System clock
+
+Every date rule uses a **simulated system date**, seeded as **2025-11-15** (inside the 2026 open enrollment). It is shown in the
+banner and on the Exchange header. Change it on **System Clock** (`/exchange/clock`, field `#system-date`, button **Set System Date**),
+with `POST /api/clock {"date":"2025-12-16"}`, or set the `system_date` parameter blank for the real date. Dates may be typed as
+`2025-12-15`, `12/15/2025` or `December 15, 2025`.
+
+### Test case → navigation map (requirement BCA:12, test cases BCA:40–49)
+
+All steps are on **Exchange › Enrollment & Eligibility (2025 CFR) › Annual Redetermination** (`/exchange/redetermination`).
+
+| Test step | Where | Selector |
+|---|---|---|
+| Set / advance system date | System Clock | `#system-date` → **Set System Date** (`#btn-set-system-date`) |
+| Create enrollee record (ID, Federal platform or State-based Exchange) | Annual Redetermination → *Create enrollee record* | `#enrollee-id`, `#enrollee-platform`, `#enrollee-state`, `#enrollee-benefit-year` → **Create Enrollee** |
+| Set prior-year coverage status, plan premium, issuer ID | Enrollee page → *Enrollee & plan* | `#prior-coverage-status`, `#plan-premium`, `#issuer-id` → **Save Enrollee** |
+| Set plan selection deadline (§ 155.410(f)) | Annual Redetermination → *Plan selection deadlines* | `#deadline-2026`, `#deadline-2027` → **Save Deadlines** |
+| Run annual redetermination | Enrollee page | **Run Annual Redetermination** (`#btn-run-redetermination`) |
+| Set calculated APTC; check net premium after APTC | Enrollee page | `#calculated-aptc` → **Save APTC**; read `#net-premium-after-aptc` |
+| Verify no updated application exists | Enrollee page | `#updated-application-status` |
+| Submit updated eligibility application at a timestamp | Enrollee page | `#application-timestamp` (`2025-12-10 14:30:00`) → **Submit Updated Application** |
+| Execute passive re-enrollment | Enrollee page | **Execute Passive Re-enrollment** (`#btn-execute-reenrollment`); result `#redetermination-result` |
+| Apply $5 minimum premium adjustment | Enrollee page | **Apply $5 Minimum Premium Adjustment** (already applied by re-enrollment when the rule is met) |
+| Retrieve final APTC and net monthly premium | Enrollee page | `#final-aptc`, `#enrollee-net-premium`, `#minimum-premium-applied` |
+| Premium record display | **View Premium Record** | `#premium-record-aptc`, `#premium-record-net-premium` |
+| Generate 834 for issuer; read APTC and net premium | **834 Transactions** (`/exchange/834`) | `#edi-issuer-id` → **Generate 834 Transaction**; `#edi-aptc-<enrollee>`, `#edi-net-premium-<enrollee>`, raw file `#edi-content` |
+
+Rule: the $5 minimum applies only for benefit year 2026, on the Federal platform (FFE or SBE-FP), when the net premium after
+APTC is $0 and no updated application was submitted on or before the deadline. Passive re-enrollment runs only after the deadline.
+API equivalents: `/api/redetermination/enrollees[/:id[/redetermine|/aptc|/applications|/reenroll|/minimum-premium|/premium-record]]`, `/api/834`.
+
+### Other BCA requirements (no test cases yet)
+
+| Requirement(s) | Where in the app | Rule tool |
+|---|---|---|
+| BCA:2 lawful presence (DACA excluded) | Application › Household: *Citizenship or immigration status*; Eligibility results | `lawful-presence` |
+| BCA:4–6 FTR by plan year | Eligibility results (*Tax filing (FTR) check*); FTR Notices (plan year select) | `ftr-eligibility` |
+| BCA:7 90-day inconsistency, no 60-day income extension | Inconsistencies: **Run Deadline Check**, good-faith extension | `inconsistency-deadline` |
+| BCA:8–10 income checks, no tax data | Application › Income: *Data hub results* (blank tax data = none returned) | `income-increase-check`, `no-tax-data` |
+| BCA:33 preponderance of the evidence | Inconsistency › *Resolve with documents* | `preponderance` |
+| BCA:11 CSR bronze crosswalk | Annual Redetermination (re-enrolled metal level) | `reenrollment-crosswalk` |
+| BCA:13 payment thresholds by plan year | Consumer payments; issuer configuration | `premium-threshold` (plan year), `threshold-config` |
+| BCA:14–17 open enrollment and effective dates | Application › Choose a plan (window and effective date); Regulatory Parameters `oep_*` (validated) | `oep-window`, `oep-effective-date` |
+| BCA:18–22 SEPs, d(16), 2026 verification | My account › **Report a life change (SEP)** (`/sep/new`); Exchange › Special Enrollment (75% rate) | `sep-d16`, `sep-plan-change`, `sep-verification`, `sep-verification-rate` |
+| BCA:23 EHB-benchmark scope | — | `ehb-benchmark` |
+| BCA:24, 30 EHB prohibited benefits | Plan Data Validation (seeded violations on `10101TX0010001`, `10202TX0050001`) | `ehb-prohibited` |
+| BCA:25–27 AV de minimis | Plan Data Validation | `av-de-minimis` |
+| BCA:29 silver plan variation AV | — (band in parameters `csr_variation_de_minimis_*`; **confirm against 90 FR 27223**) | `csr-variation-av` |
+| BCA:28, 38, 39 plan options | Plan Data Validation | `meaningful-difference`, `nonstandard-limit`, `chronic-exception-cell` |
+| BCA:3, 34 agents and brokers | Agent page: suspension needs a remediation basis to lift; **Terminate for Cause** needs an evidentiary basis | `agent-suspension`, `termination-for-cause` |
+| BCA:31, 32, 35–37 | CSR loading; reconsideration instructions; overdue data-inaccuracy flag; appeals; RADV threshold | existing tools |
+
+Behaviour changes from the 2024 rules: a single FTR year now denies APTC for plan year 2026; enrollment outside open enrollment
+needs an SEP; the gross-premium and fixed-dollar payment thresholds apply only from 2027. Plan year 2027 applications use the
+2026 plan designs (no 2027 plan data is seeded). The schema version changed, so the database resets on first start.
+
 ## Database for data tests
 
 - File: `data/aca.db` (SQLite). Connect from UiPath with the Database activities through an SQLite ODBC driver,
@@ -188,7 +260,8 @@ duplicate, fails 156.201(c)), `10101TX0080001` (different network, passes), and 
 - Main tables: `qhp_certifications`, `qhp_assessments`, `qhp_checklist_items`, `qhp_denials`, `qhp_reconsiderations`,
   `plans`, `issuers`, `applications`, `household_members`, `income_sources`, `enrollments`, `premium_payments`, `appeals`,
   `agents`, `agencies`, `compliance_actions`, `ftr_cases`, `notices`, `data_inaccuracy_reports`, `qis_submissions`,
-  `reg_parameters`, `audit_log`.
+  `reg_parameters`, `audit_log`, and for BCA: `redetermination_enrollees`, `updated_applications`, `edi_834_files`,
+  `inconsistencies`, `sep_requests`, `plan_benefits`.
 - Schema and seed data: `src/db.js`.
 
 ## Code layout
@@ -197,10 +270,14 @@ duplicate, fails 156.201(c)), `10101TX0080001` (different network, passes), and 
 src/server.js           HTTP server and request context
 src/db.js               schema, seed data, reset
 src/rules.js            regulatory rules engine and tool catalog
+src/bca.js              2025 CFR rules (project BCA) and their rule tools
 src/marketplace.js      premiums, SLCSP, APTC/CSR/Medicaid
 src/routes/consumer.js  consumer site
 src/routes/exchange.js  Exchange portal (certification workflow, operations, tools)
+src/routes/redetermination.js  annual redetermination, passive re-enrollment, 834 files, system clock (BCA:11, 12)
+src/routes/bca.js       BCA flows: application eligibility, inconsistencies, SEPs, plan data validation, agent termination
 src/routes/api.js       JSON API and traceability map
 public/                 CSS and a small client script (dialog, panels, row selection)
 test/smoke.js           end-to-end check of ACA:151–160 and the rules
+test/bca.js             end-to-end check of BCA:40–49 and the other BCA requirements
 ```

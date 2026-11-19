@@ -29,6 +29,28 @@ const TRACE = {
   'ACA:17': { ui: ['/exchange/review/:planId?section=ecp'], api: ['/api/rules/ecp-review'] },
   'ACA:44': { ui: ['/exchange/review/:planId?section=ecp'], api: ['/api/rules/ecp-review'] },
   'ACA:18': { ui: ['/exchange/qis-report'], api: ['/api/qis-report'] },
+  // ---- Project BCA (2025 CFR changes) ----
+  'BCA:2': { ui: ['/apply/:num/household (immigration status)', '/apply/:num/results'], api: [] },
+  'BCA:3': { ui: ['/exchange/agents/:npn (suspend / reinstate with remediation)'], api: [] },
+  'BCA:4': { ui: ['/apply/:num/results (FTR check)', '/exchange/notices'], api: [] },
+  'BCA:5': { ui: ['/exchange/notices'], api: [] }, 'BCA:6': { ui: ['/exchange/notices', '/apply/:num/results'], api: [] },
+  'BCA:7': { ui: ['/exchange/inconsistencies'], api: ['/api/inconsistencies/deadline-check'] },
+  'BCA:8': { ui: ['/apply/:num/income (data hub)', '/exchange/inconsistencies'], api: [] }, 'BCA:9': { ui: ['/apply/:num/income (alternate data)'], api: [] },
+  'BCA:10': { ui: ['/apply/:num/income (blank tax data)'], api: [] },
+  'BCA:11': { ui: ['/exchange/redetermination/:id'], api: ['/api/redetermination/enrollees/:id/reenroll'] },
+  'BCA:12': { ui: ['/exchange/redetermination', '/exchange/redetermination/:id', '/exchange/redetermination/:id/premium-record', '/exchange/834', '/exchange/clock'],
+    api: ['/api/clock', '/api/redetermination/enrollees', '/api/redetermination/enrollees/:id/reenroll', '/api/redetermination/enrollees/:id/premium-record', '/api/834'],
+    tests: ['BCA:40', 'BCA:41', 'BCA:42', 'BCA:43', 'BCA:44', 'BCA:45', 'BCA:46', 'BCA:47', 'BCA:48', 'BCA:49'] },
+  'BCA:13': { ui: ['/enrollments/:num (payments)'], api: [] },
+  'BCA:14': { ui: ['/apply/:num/plans', '/exchange/parameters'], api: [] }, 'BCA:15': { ui: ['/apply/:num/plans', '/exchange/parameters'], api: [] },
+  'BCA:16': { ui: ['/apply/:num/enroll'], api: [] }, 'BCA:17': { ui: ['/apply/:num/enroll'], api: [] },
+  'BCA:18': { ui: ['/sep/new'], api: [] }, 'BCA:19': { ui: ['/sep/new'], api: [] }, 'BCA:20': { ui: ['/sep/new'], api: [] }, 'BCA:21': { ui: ['/sep/new'], api: [] },
+  'BCA:22': { ui: ['/sep/new', '/exchange/sep'], api: [] },
+  'BCA:24': { ui: ['/exchange/plan-validation'], api: ['/api/plan-validation/:id'] }, 'BCA:25': { ui: ['/exchange/plan-validation'], api: ['/api/plan-validation/:id'] },
+  'BCA:28': { ui: ['/exchange/plan-validation'], api: ['/api/plan-validation/:id'] }, 'BCA:38': { ui: ['/exchange/plan-validation'], api: ['/api/plan-validation/:id'] },
+  'BCA:32': { ui: ['/exchange/reconsiderations/new?denial=:num'], api: [] },
+  'BCA:33': { ui: ['/exchange/inconsistencies/:num (resolve)'], api: [] }, 'BCA:34': { ui: ['/exchange/agents/:npn (terminate for cause)'], api: [] },
+  'BCA:35': { ui: ['/exchange/data-inaccuracy'], api: [] }, 'BCA:36': { ui: ['/appeals/new'], api: [] },
 };
 for (const t of R.TOOLS) for (const r of t.reqs) {
   TRACE[r] ||= { ui: [], api: [] };

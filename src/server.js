@@ -7,8 +7,11 @@ const W = require('./web');
 const { page } = require('./layout');
 
 D.init();
+require('./bca');                       // 2025 CFR rules (Test Manager project BCA); adds rule tools
 require('./routes/consumer');
 require('./routes/exchange');
+require('./routes/redetermination');
+require('./routes/bca');
 require('./routes/api');
 
 const PORT = Number(process.env.PORT) || 3000;

@@ -88,7 +88,8 @@ CREATE TABLE agents (
 CREATE TABLE compliance_actions (
   id INTEGER PRIMARY KEY, action_number TEXT UNIQUE NOT NULL, action_type TEXT NOT NULL,
   agency_id INTEGER REFERENCES agencies(id), agent_id INTEGER REFERENCES agents(id),
-  basis TEXT NOT NULL, notes TEXT, outcome TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL
+  basis TEXT NOT NULL, notes TEXT, outcome TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL,
+  authority TEXT, evidentiary_basis TEXT, evidence_standard TEXT, resolved_on TEXT, resolution_basis TEXT
 );
 CREATE TABLE applications (
   id INTEGER PRIMARY KEY, app_number TEXT UNIQUE NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id),
@@ -98,12 +99,17 @@ CREATE TABLE applications (
   slcsp_plan_id TEXT, slcsp_premium REAL,
   assisted_by_agent_id INTEGER REFERENCES agents(id),
   consent_given INTEGER NOT NULL DEFAULT 0, consent_review_confirmed INTEGER NOT NULL DEFAULT 0, consent_method TEXT,
-  signature TEXT, created_at TEXT NOT NULL, submitted_at TEXT
+  signature TEXT, created_at TEXT NOT NULL, submitted_at TEXT,
+  -- Simulated data hub results and 2025 CFR eligibility outcomes (BCA:2, 4-10)
+  tax_data_income REAL, alternate_data_income REAL, verification_path TEXT, income_verification TEXT,
+  ftr_outcome TEXT, eligibility_notes TEXT
 );
 CREATE TABLE household_members (
   id INTEGER PRIMARY KEY, application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
   first_name TEXT NOT NULL, last_name TEXT NOT NULL, dob TEXT NOT NULL, sex TEXT, relationship TEXT NOT NULL,
-  applying INTEGER NOT NULL DEFAULT 1, tobacco INTEGER NOT NULL DEFAULT 0, ssn_last4 TEXT
+  applying INTEGER NOT NULL DEFAULT 1, tobacco INTEGER NOT NULL DEFAULT 0, ssn_last4 TEXT,
+  immigration_status TEXT NOT NULL DEFAULT 'citizen',      -- BCA:2 lawful presence (see bca.IMMIGRATION_STATUSES)
+  lawfully_present INTEGER, medicaid_ineligible_immigration INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE income_sources (
   id INTEGER PRIMARY KEY, application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
@@ -147,19 +153,68 @@ CREATE TABLE qis_submissions (
   exchange_type TEXT NOT NULL, focus_area TEXT NOT NULL, target_met INTEGER NOT NULL
 );
 CREATE TABLE reg_parameters (key TEXT PRIMARY KEY, value TEXT NOT NULL, description TEXT NOT NULL, citation TEXT);
+-- ---- 2025 CFR changes (Test Manager project BCA) ----
+CREATE TABLE redetermination_enrollees (           -- BCA:11, BCA:12 annual redetermination and passive re-enrollment
+  id INTEGER PRIMARY KEY, enrollee_id TEXT UNIQUE NOT NULL, first_name TEXT NOT NULL, last_name TEXT NOT NULL,
+  platform TEXT NOT NULL,                  -- FFE | SBE-FP (both Federal platform) | SBE (State-based Exchange)
+  state TEXT NOT NULL, benefit_year INTEGER NOT NULL, prior_coverage_status TEXT NOT NULL,
+  plan_id TEXT, metal TEXT NOT NULL DEFAULT 'Silver', csr_eligible INTEGER NOT NULL DEFAULT 0, issuer_ref TEXT,
+  plan_premium REAL, calculated_aptc REAL, net_premium_before REAL, redetermined_at TEXT,
+  reenrolled_at TEXT, reenrolled_metal TEXT, final_aptc REAL, final_net_premium REAL,
+  minimum_premium_applied INTEGER NOT NULL DEFAULT 0, rule_result TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE updated_applications (
+  id INTEGER PRIMARY KEY, enrollee_id TEXT NOT NULL REFERENCES redetermination_enrollees(enrollee_id) ON DELETE CASCADE,
+  submitted_at TEXT NOT NULL, before_deadline INTEGER NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE edi_834_files (
+  id INTEGER PRIMARY KEY, file_number TEXT UNIQUE NOT NULL, issuer_ref TEXT NOT NULL, benefit_year INTEGER,
+  member_count INTEGER NOT NULL, content TEXT NOT NULL, members_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE TABLE inconsistencies (                       -- BCA:7-10 data matching inconsistencies
+  id INTEGER PRIMARY KEY, inc_number TEXT UNIQUE NOT NULL, application_id INTEGER NOT NULL REFERENCES applications(id),
+  inc_type TEXT NOT NULL, detail TEXT NOT NULL, notice_date TEXT NOT NULL, deadline TEXT NOT NULL,
+  extension_days INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, resolved_on TEXT, outcome TEXT
+);
+CREATE TABLE sep_requests (                          -- BCA:18-22 special enrollment periods
+  id INTEGER PRIMARY KEY, sep_number TEXT UNIQUE NOT NULL, user_id INTEGER REFERENCES users(id),
+  application_id INTEGER REFERENCES applications(id), plan_year INTEGER NOT NULL, sep_type TEXT NOT NULL,
+  event_date TEXT NOT NULL, fpl_percent REAL, aptc_eligible INTEGER NOT NULL DEFAULT 0,
+  verification TEXT NOT NULL, current_metal TEXT, new_plan_id TEXT, new_metal TEXT, effective_date TEXT,
+  status TEXT NOT NULL, status_reason TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE plan_benefits (                         -- BCA:24, BCA:30 EHB classification per plan
+  plan_id TEXT NOT NULL REFERENCES plans(id), benefit_code TEXT NOT NULL, classified_ehb INTEGER NOT NULL,
+  PRIMARY KEY (plan_id, benefit_code)
+);
 CREATE TABLE audit_log (
   id INTEGER PRIMARY KEY, entity TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL,
   detail TEXT, actor TEXT NOT NULL, at TEXT NOT NULL
 );
 `;
 
-const TABLES = ['audit_log', 'reg_parameters', 'qis_submissions', 'data_inaccuracy_reports', 'notices', 'ftr_cases',
+const TABLES = ['plan_benefits', 'sep_requests', 'inconsistencies', 'edi_834_files', 'updated_applications', 'redetermination_enrollees',
+  'audit_log', 'reg_parameters', 'qis_submissions', 'data_inaccuracy_reports', 'notices', 'ftr_cases',
   'appeals', 'premium_payments', 'enrollments', 'income_sources', 'household_members', 'applications',
   'compliance_actions', 'agents', 'agencies', 'users', 'qhp_reconsiderations', 'qhp_denials', 'qhp_checklist_items',
   'qhp_assessments', 'qhp_certifications', 'bhp_slcsp_candidates', 'plan_service_areas', 'plans', 'issuers',
   'zip_codes', 'counties', 'states'];
 
-function nowIso() { return new Date().toISOString(); }
+const SCHEMA_VERSION = '2';
+
+// ---- Simulated system clock (reg_parameters.system_date). Tests set it with "Set system date". ----
+function clockDate() {
+  try {
+    const r = db.prepare("SELECT value FROM reg_parameters WHERE key = 'system_date'").get();
+    return r && /^\d{4}-\d{2}-\d{2}$/.test(r.value) ? r.value : null;
+  } catch { return null; }
+}
+function today() { return clockDate() || new Date().toISOString().slice(0, 10); }
+function nowIso() {
+  const real = new Date().toISOString();
+  const d = clockDate();
+  return d ? d + real.slice(10) : real;
+}
 
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -451,7 +506,33 @@ function seed() {
     ['reconsideration_days', '7', 'Calendar days for FFE certification denial reconsideration request', '45 CFR 155.1090(a)(2)'],
     ['data_inaccuracy_days', '60', 'Calendar days for State Exchange to resolve complete issuer data inaccuracy report', '45 CFR 155.400(d)(1)'],
     ['payment_fixed_threshold', '10', 'Fixed-dollar premium payment threshold (inflation adjusted)', '45 CFR 155.400(g)'],
+    // ---- 2025 CFR changes (BCA) ----
+    ['schema_version', SCHEMA_VERSION, 'Database schema version; a different version resets the data on start', null],
+    ['system_date', '2025-11-15', 'Simulated system date (YYYY-MM-DD) used by every date rule; blank = the real date', 'Test clock'],
+    ['plan_selection_deadline_2026', '2025-12-15', 'Last day to select a plan for coverage effective January 1, 2026', '45 CFR 155.410(f)'],
+    ['plan_selection_deadline_2027', '2026-12-31', 'Last day to select a plan for coverage effective January 1, 2027', '45 CFR 155.410(f)(4)'],
+    ['oep_start_2026', '2025-11-01', 'Open enrollment start, benefit year 2026', '45 CFR 155.410(e)(4)'],
+    ['oep_end_2026', '2026-01-15', 'Open enrollment end, benefit year 2026', '45 CFR 155.410(e)(4)'],
+    ['oep_start_2027', '2026-11-01', 'Open enrollment start, benefit year 2027 (no later than Nov 1)', '45 CFR 155.410(e)(5)'],
+    ['oep_end_2027', '2026-12-31', 'Open enrollment end, benefit year 2027 (no later than Dec 31, at most 9 weeks)', '45 CFR 155.410(e)(5)'],
+    ['minimum_premium_amount', '5', 'Net monthly premium set for $0 passive re-enrollees, benefit year 2026, Federal platform', '45 CFR 155.335(n)'],
+    ['inconsistency_days', '90', 'Inconsistency resolution period in days (no automatic 60-day income extension)', '45 CFR 155.315(f)'],
+    ['income_increase_threshold_pct', '10', 'Reasonable threshold (%) for the sub-100% FPL income-increase check; not less than 10', '45 CFR 155.320(c)(3)(iii)(D)'],
+    ['sep_verification_rate_min', '75', 'Minimum share (%) of new SEP enrollments verified before enrollment, 2026', '45 CFR 155.420(g)'],
+    ['csr_variation_de_minimis_low', '-1', 'Silver plan variation AV de minimis, lower bound (pp). Confirm against 90 FR 27223', '45 CFR 156.400'],
+    ['csr_variation_de_minimis_high', '1', 'Silver plan variation AV de minimis, upper bound (pp). Confirm against 90 FR 27223', '45 CFR 156.400'],
   ].forEach(([key, value, description, citation]) => insert('reg_parameters', { key, value, description, citation }));
+
+  // ---- 2025 CFR changes (BCA): sample data ----
+  // Annual redetermination sample enrollees (test cases create their own ENR-2026-0xx records).
+  insert('redetermination_enrollees', { enrollee_id: 'ENR-DEMO-001', first_name: 'Rosa', last_name: 'Passive', platform: 'FFE', state: 'TX', benefit_year: 2026,
+    prior_coverage_status: 'Active', plan_id: '10101TX0010001', metal: 'Bronze', csr_eligible: 1, issuer_ref: 'ISS-10101', plan_premium: 268, status: 'Awaiting Redetermination', created_at: created });
+  insert('redetermination_enrollees', { enrollee_id: 'ENR-DEMO-002', first_name: 'Sam', last_name: 'Stateside', platform: 'SBE', state: 'GA', benefit_year: 2026,
+    prior_coverage_status: 'Active', plan_id: '40606GA0030001', metal: 'Silver', csr_eligible: 0, issuer_ref: 'ISS-40606', plan_premium: 362.56, status: 'Awaiting Redetermination', created_at: created });
+  // EHB classification (BCA:24, 30): two seeded violations for the PY2026 rules.
+  [['10101TX0010001', 'routine_adult_dental', 1], ['10101TX0010001', 'ambulatory', 1], ['10202TX0050001', 'sex_trait_modification', 1],
+    ['10202TX0050001', 'prescription_drugs', 1], ['20303OH0030001', 'routine_adult_eye_exam', 0], ['20303OH0030001', 'pediatric_dental', 1]]
+    .forEach(([plan_id, benefit_code, classified_ehb]) => insert('plan_benefits', { plan_id, benefit_code, classified_ehb }));
 
   insert('audit_log', { entity: 'system', entity_id: 'seed', action: 'Database seeded', detail: DB_PATH, actor: 'system', at: created });
 }
@@ -473,7 +554,9 @@ function reset() {
 
 function init() {
   const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='qhp_certifications'").get();
-  if (!exists || process.env.ACA_RESET_ON_START === '1') reset();
+  let version = null;
+  try { const r = db.prepare("SELECT value FROM reg_parameters WHERE key = 'schema_version'").get(); version = r && r.value; } catch { /* old database */ }
+  if (!exists || version !== SCHEMA_VERSION || process.env.ACA_RESET_ON_START === '1') reset();
 }
 
 const all = (sql, ...p) => db.prepare(sql).all(...p);
@@ -495,4 +578,6 @@ function audit(entity, entityId, action, detail, actor) {
   insert('audit_log', { entity, entity_id: String(entityId), action, detail: detail || null, actor: actor || 'anonymous', at: nowIso() });
 }
 
-module.exports = { db, DB_PATH, TABLES, init, reset, all, get, run, insert, param, nextNumber, audit, hashPassword, verifyPassword, nowIso };
+function setParam(key, value) { run('UPDATE reg_parameters SET value = ? WHERE key = ?', String(value), key); }
+
+module.exports = { db, DB_PATH, TABLES, SCHEMA_VERSION, init, reset, all, get, run, insert, param, setParam, nextNumber, audit, hashPassword, verifyPassword, nowIso, today, clockDate };

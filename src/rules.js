@@ -26,7 +26,7 @@ function daysBetween(a, b) {
   if (Number.isNaN(da.getTime()) || Number.isNaN(dbb.getTime())) throw new RuleError('Invalid date.');
   return Math.round((dbb - da) / 86400000);
 }
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => D.today();   // simulated system date (reg_parameters.system_date) or the real date
 // Standardized plan options by plan year (ACA:22, 45, 46).
 //  PY2025: 2025 Payment Notice, 89 FR 26358–59 (PDF pp.141–42) — no explicit meaningful-difference rule.
 //  PY2026: 2026 Payment Notice, 90 FR 4493–4500 (PDF pp.70–77) — adds 45 CFR 156.201(c), 90 FR 4541 (PDF p.118).
@@ -109,18 +109,24 @@ const rules = {
     return amt >= threshold ? { rerun: true, reason: `Impact ${money(amt)} meets the ${money(threshold)} threshold` } : { rerun: false, reason: `Impact ${money(amt)} is below the ${money(threshold)} threshold — results are not rerun` };
   },
 
-  premiumThreshold({ policies, paymentType, grossPremium, aptc, amountPaid }) {
+  // 45 CFR 155.400(g) as amended (BCA:13): through Dec 31, 2026 only the net-premium threshold (exactly 95%) applies;
+  // from Jan 1, 2027 the gross-premium (>=98%) and fixed-dollar (<= $10, inflation adjusted) thresholds are also allowed,
+  // but they never effectuate a binder payment. planYear omitted = 2027+ behaviour (all three types).
+  premiumThreshold({ policies, paymentType, grossPremium, aptc, amountPaid, planYear }) {
     const gross = num(grossPremium, 'Gross premium'); const credit = num(aptc || 0, 'APTC'); const paid = num(amountPaid, 'Amount paid');
     const net = Math.max(0, round(gross - credit, 2));
     const unpaid = round(net - paid, 2);
     const fixed = Number(D.param('payment_fixed_threshold', 10));
     const binder = paymentType === 'binder';
+    const y = planYear === undefined || planYear === null || planYear === '' ? null : int(planYear, 'Plan year');
+    const newTypesAllowed = y === null || y >= 2027;
     const applied = [];
-    if (unpaid <= 0) return { sufficient: true, net, unpaid: 0, applied: ['Paid in full'], note: 'Payment covers the full net premium.' };
+    if (unpaid <= 0) return { sufficient: true, net, unpaid: 0, applied: ['Paid in full'], note: 'Payment covers the full net premium.', planYear: y };
     if (policies.includes('net95') && paid >= 0.95 * net) applied.push('Net premium threshold (≥95% of net premium)');
-    if (!binder && policies.includes('gross98') && (paid + credit) >= 0.98 * gross) applied.push('Gross premium threshold (≥98% of gross premium)');
-    if (!binder && policies.includes('fixed10') && unpaid <= fixed) applied.push(`Fixed-dollar threshold (unpaid ≤ ${money(fixed)})`);
+    if (newTypesAllowed && !binder && policies.includes('gross98') && (paid + credit) >= 0.98 * gross) applied.push('Gross premium threshold (≥98% of gross premium)');
+    if (newTypesAllowed && !binder && policies.includes('fixed10') && unpaid <= fixed) applied.push(`Fixed-dollar threshold (unpaid ≤ ${money(fixed)})`);
     const excluded = binder ? ['Gross and fixed-dollar thresholds do not apply to binder payments'] : [];
+    if (!newTypesAllowed && (policies.includes('gross98') || policies.includes('fixed10'))) excluded.push(`PY${y}: gross-premium and fixed-dollar thresholds apply only beginning January 1, 2027 (45 CFR 155.400(g)(2)–(3))`);
     return applied.length
       ? { sufficient: true, net, unpaid, applied, note: 'Treated as payment in full under the issuer\'s uniformly applied threshold policy.', excluded }
       : { sufficient: false, net, unpaid, applied: [], note: binder ? 'Binder payment insufficient — coverage is not effectuated.' : 'Payment insufficient — grace period / termination rules apply.', excluded };
@@ -325,9 +331,10 @@ const TOOLS = [
   { id: 'premium-threshold', group: 'Fees & Payments', title: 'Premium Payment Threshold', reqs: ['ACA:14', 'ACA:40'], cite: '45 CFR 155.400(g)',
     inputs: [{ name: 'issuer', label: 'Issuer (uniform threshold policy)', type: 'select', options: () => D.all('SELECT id, name, payment_threshold_policy p FROM issuers ORDER BY name').map(r => [String(r.id), `${r.name} (${r.p})`]) },
       { name: 'paymentType', label: 'Payment type', type: 'select', options: [['ongoing', 'Ongoing monthly premium'], ['binder', 'Binder (initial) payment']] },
-      { name: 'grossPremium', label: 'Gross monthly premium ($)', type: 'number', value: '600' }, { name: 'aptc', label: 'APTC ($)', type: 'number', value: '400' }, { name: 'amountPaid', label: 'Amount paid ($)', type: 'number', value: '191' }],
+      { name: 'grossPremium', label: 'Gross monthly premium ($)', type: 'number', value: '600' }, { name: 'aptc', label: 'APTC ($)', type: 'number', value: '400' }, { name: 'amountPaid', label: 'Amount paid ($)', type: 'number', value: '191' },
+      { name: 'planYear', label: 'Plan year (blank = 2027 and later rules)', type: 'number', value: '' }],
     run: i => { const iss = D.get('SELECT * FROM issuers WHERE id = ?', Number(i.issuer)); if (!iss) throw new RuleError('Select an issuer.');
-      const r = rules.premiumThreshold({ policies: iss.payment_threshold_policy.split(','), paymentType: i.paymentType, grossPremium: i.grossPremium, aptc: i.aptc, amountPaid: i.amountPaid });
+      const r = rules.premiumThreshold({ policies: iss.payment_threshold_policy.split(','), paymentType: i.paymentType, grossPremium: i.grossPremium, aptc: i.aptc, amountPaid: i.amountPaid, planYear: i.planYear });
       return { outcome: r.sufficient ? 'Treated as paid in full' : 'Insufficient payment', data: { ...r, policy: iss.payment_threshold_policy },
         rows: [['Net premium due', money(r.net)], ['Unpaid amount', money(r.unpaid)], ['Threshold applied', r.applied.join('; ') || 'None'], ['Result', r.note], ...(r.excluded || []).map(e => ['Note', e])] }; } },
   { id: 'csr-loading', group: 'Plan Design', title: 'CSR Loading Recognition', reqs: ['ACA:20', 'ACA:47'], cite: '45 CFR 156.80(d)(2)(i)',
@@ -401,4 +408,4 @@ function runTool(id, inputs) {
   return t.run(inputs || {});
 }
 
-module.exports = { rules, TOOLS, runTool, resolveOptions, RuleError, SUSPENSION_GROUNDS, APPEAL_ROLES, EVIDENCE_OPTIONS, addDays, daysBetween, today, money, pct, round, num, bool };
+module.exports = { rules, TOOLS, runTool, resolveOptions, RuleError, SUSPENSION_GROUNDS, APPEAL_ROLES, EVIDENCE_OPTIONS, addDays, daysBetween, today, money, pct, round, num, int, bool };
