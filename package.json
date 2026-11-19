@@ -2,12 +2,14 @@
   "name": "aca-marketplace-sim",
   "version": "1.0.0",
   "private": true,
-  "description": "Healthcare marketplace + Exchange QHP certification portal test application (fictional data) for UiPath Test Manager project ACA",
+  "description": "Healthcare marketplace + Exchange QHP certification portal test application (fictional data) for UiPath Test Manager projects ACA and BCA",
   "main": "src/server.js",
   "engines": { "node": ">=22.13" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "reset": "node --disable-warning=ExperimentalWarning -e \"require('./src/db').reset(); console.log('Database reset')\"",
-    "smoke": "node --disable-warning=ExperimentalWarning test/smoke.js"
+    "smoke": "node --disable-warning=ExperimentalWarning test/smoke.js",
+    "smoke:bca": "node --disable-warning=ExperimentalWarning test/bca.js",
+    "test": "node --disable-warning=ExperimentalWarning test/smoke.js && node --disable-warning=ExperimentalWarning test/bca.js"
   }
 }

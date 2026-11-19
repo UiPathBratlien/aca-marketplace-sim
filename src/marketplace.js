@@ -51,8 +51,11 @@ function applicablePercent(fpl) {
 }
 
 function plansInCounty(fips, year = 2026) {
-  return D.all(`SELECT p.*, i.name AS issuer_name FROM plans p JOIN issuers i ON i.id = p.issuer_id
-    JOIN plan_service_areas a ON a.plan_id = p.id WHERE a.county_fips = ? AND p.plan_year = ? ORDER BY p.base_premium`, fips, year);
+  const q = y => D.all(`SELECT p.*, i.name AS issuer_name FROM plans p JOIN issuers i ON i.id = p.issuer_id
+    JOIN plan_service_areas a ON a.plan_id = p.id WHERE a.county_fips = ? AND p.plan_year = ? ORDER BY p.base_premium`, fips, y);
+  const rows = q(year);
+  // No PY2027 plan data is seeded yet: PY2027 applications are offered the PY2026 plan designs.
+  return rows.length || year <= 2026 ? rows : q(2026);
 }
 
 const r2 = n => Math.round(n * 100) / 100;

@@ -4,6 +4,7 @@
 // data inaccuracy (ACA:13/39), QIS report (ACA:18), rule tools, parameters and test-data admin.
 const D = require('../db');
 const R = require('../rules');
+const BCA = require('../bca');
 const { getR, postR, h, raw, field, select, textarea, button, linkBtn, alertBox, errors, table, dl, badge, slug, redirect } = require('../web');
 const { breadcrumb } = require('../layout');
 
@@ -440,7 +441,8 @@ getR('/exchange/reconsiderations', ctx => ctx.render('Reconsiderations', h`<h1 i
 function reconForm(ctx, d, values = {}, errs = []) {
   return ctx.render('Request Reconsideration', h`${breadcrumb([['Dashboard', '/exchange'], ['Denials', '/exchange/denials'], [d.denial_number, `/exchange/denials/${d.denial_number}`], ['Request Reconsideration']])}
     <h1 id="page-title">Request reconsideration — ${d.plan_id}</h1>
-    <p class="lead">Denied ${d.denied_on}. Requests must be received by <strong id="deadline">${d.reconsideration_deadline}</strong> (7 calendar days).</p>${errors(errs)}
+    <p class="lead">Denied ${d.denied_on}. Requests must be received by <strong id="deadline">${d.reconsideration_deadline}</strong> (7 calendar days).</p>
+    <p id="reconsideration-instructions">Your request must include a statement or documents that give <strong>clear and convincing evidence</strong> that HHS was wrong to find the plan does not meet the general certification criteria in 45 CFR 155.1000(c) (45 CFR 155.1090(a)(2)). Requests without that evidence are incomplete.</p>${errors(errs)}
     <form method="post" action="/exchange/reconsiderations" class="card narrow" id="reconsideration-form">
       <input type="hidden" name="denial" value="${d.denial_number}">
       ${field({ name: 'receivedOn', id: 'received-on', type: 'date', label: 'Request received date', value: values.receivedOn || R.today(), required: true })}
@@ -459,7 +461,7 @@ postR('/exchange/reconsiderations', ctx => {
   if (!d) return ctx.notFound('Denial not found.');
   const errs = [];
   if (!b.evidenceStandard) errs.push('Select the evidence standard.');
-  if (!(b.evidenceSummary || '').trim()) errs.push('Evidence summary is required.');
+  if (!(b.evidenceSummary || '').trim()) errs.push('Incomplete request: provide a statement or documents addressing the 45 CFR 155.1000(c) criteria (clear and convincing evidence, 45 CFR 155.1090(a)(2)).');
   let r;
   try { if (!errs.length) r = R.rules.reconsideration(d.denied_on, b.receivedOn, b.evidenceStandard); } catch (e) { errs.push(e.message); }
   if (errs.length) return reconForm(ctx, d, b, errs);
@@ -490,11 +492,19 @@ getR('/exchange/agents/:npn', ctx => {
     <h1 id="page-title">${a.first_name} ${a.last_name} (NPN ${a.npn})</h1>
     <div class="card">${dl([['Agency', a.agency || 'Independent'], ['Lead agent', a.is_lead_agent ? 'Yes' : 'No'], ['State', a.state], ['Status', h`<span id="agent-status">${badge(a.status)}</span>`],
       ['Suspension ground', a.suspension_ground || '—'], ['Suspended on', a.suspended_on || '—']], 'agent-details')}</div>
-    ${suspended ? h`<form method="post" action="/exchange/agents/${a.npn}/reinstate" class="card narrow">${alertBox('warning', 'Exchange system access suspended', 'The agent cannot submit Exchange transactions or be selected as assisting agent. Consumers can still enroll through the Marketplace Call Center or consumer website.', 'suspension-notice')}<div class="actions">${button('Reinstate Access')}</div></form>`
+    ${a.status === 'Terminated for Cause' ? alertBox('error', 'Agreement terminated for cause', 'Noncompliance under 45 CFR 155.220(g)(1), supported by a preponderance of the evidence (45 CFR 155.220(g)(2)).', 'termination-notice')
+      : suspended ? h`<form method="post" action="/exchange/agents/${a.npn}/reinstate" class="card narrow">${alertBox('warning', 'Exchange system access suspended', 'The agent cannot submit Exchange transactions or be selected as assisting agent. Consumers can still enroll through the Marketplace Call Center or consumer website.', 'suspension-notice')}
+        ${textarea({ name: 'resolution', id: 'suspension-resolution', label: 'How the incident, breach or noncompliance was remedied or mitigated (required to lift a (k)(3) suspension)', rows: 3 })}
+        <div class="actions">${button('Reinstate Access')}</div></form>`
       : h`<form method="post" action="/exchange/agents/${a.npn}/suspend" class="card narrow" id="suspend-form"><h2>Immediate suspension — 45 CFR 155.220(k)(3)</h2>
         ${select({ name: 'ground', id: 'suspension-ground', label: 'Ground for suspension', options: R.SUSPENSION_GROUNDS, placeholder: '-- Select ground --', required: true })}
         ${textarea({ name: 'notes', id: 'suspension-notes', label: 'Notes', rows: 3 })}
-        <div class="actions">${button('Suspend Immediately', { cls: 'btn btn-danger' })}</div></form>`}`, { active: 'agents' });
+        <div class="actions">${button('Suspend Immediately', { cls: 'btn btn-danger' })}</div></form>
+      <form method="post" action="/exchange/agents/${a.npn}/terminate" class="card narrow" id="terminate-form"><h2>Termination for cause — 45 CFR 155.220(g)</h2>
+        ${textarea({ name: 'evidentiaryBasis', id: 'evidentiary-basis', label: 'Evidentiary basis for the noncompliance finding', rows: 3 })}
+        <div class="field check"><input type="checkbox" name="preponderance" value="1" id="preponderance-confirmed"><label for="preponderance-confirmed">The noncompliance finding under § 155.220(g)(1) is supported by a preponderance of the evidence</label></div>
+        <div class="actions">${button('Terminate for Cause', { cls: 'btn btn-danger', id: 'btn-terminate-for-cause' })}</div></form>`}
+    <div class="card"><h2>Enforcement history</h2>${table(['Action #', 'Type', 'Authority', 'Basis', 'Evidence', 'Outcome', 'Date', 'Lifted'], D.all('SELECT * FROM compliance_actions WHERE agent_id = ? ORDER BY id DESC', a.id).map(c => [c.action_number, c.action_type, c.authority || '—', c.basis, c.evidentiary_basis ? `${c.evidence_standard}: ${c.evidentiary_basis}` : '—', badge(c.outcome), c.created_at.slice(0, 10), c.resolved_on ? `${c.resolved_on} — ${c.resolution_basis}` : '—']), { id: 'agent-actions', empty: 'No enforcement actions.' })}</div>`, { active: 'agents' });
 });
 postR('/exchange/agents/:npn/suspend', ctx => {
   const a = D.get('SELECT * FROM agents WHERE npn = ?', ctx.params.npn);
@@ -504,7 +514,7 @@ postR('/exchange/agents/:npn/suspend', ctx => {
   const label = R.SUSPENSION_GROUNDS.find(x => x[0] === ctx.body.ground)[1];
   D.run("UPDATE agents SET status = 'Suspended - Exchange Systems', suspension_ground = ?, suspended_on = ? WHERE id = ?", label, R.today(), a.id);
   D.insert('compliance_actions', { action_number: D.nextNumber('CA', 'compliance_actions', 'action_number'), action_type: 'Immediate system suspension', agent_id: a.id, agency_id: a.agency_id,
-    basis: label, notes: ctx.body.notes || null, outcome: 'Suspended', created_by: actor(ctx.user), created_at: D.nowIso() });
+    basis: label, notes: ctx.body.notes || null, outcome: 'Suspended', created_by: actor(ctx.user), created_at: D.nowIso(), authority: '45 CFR 155.220(k)(3)' });
   D.audit('agent', a.npn, 'Suspended', label, actor(ctx.user));
   ctx.flash('success', `Agent ${a.npn} suspended from Exchange systems effective immediately.`);
   return redirect(ctx.res, `/exchange/agents/${a.npn}`);
@@ -512,8 +522,11 @@ postR('/exchange/agents/:npn/suspend', ctx => {
 postR('/exchange/agents/:npn/reinstate', ctx => {
   const a = D.get('SELECT * FROM agents WHERE npn = ?', ctx.params.npn);
   if (!a) return ctx.notFound('Agent not found.');
+  const resolution = String(ctx.body.resolution || '').trim();
+  if (!resolution) { ctx.flash('error', 'Describe how the circumstances were remedied or sufficiently mitigated before lifting the suspension (45 CFR 155.220(k)(3)).'); return redirect(ctx.res, `/exchange/agents/${a.npn}`); }
+  D.run("UPDATE compliance_actions SET resolved_on = ?, resolution_basis = ?, outcome = 'Suspension Lifted' WHERE agent_id = ? AND action_type = 'Immediate system suspension' AND resolved_on IS NULL", R.today(), resolution, a.id);
   D.run("UPDATE agents SET status = 'Active', suspension_ground = NULL, suspended_on = NULL WHERE id = ?", a.id);
-  D.audit('agent', a.npn, 'Reinstated', null, actor(ctx.user));
+  D.audit('agent', a.npn, 'Reinstated', resolution, actor(ctx.user));
   ctx.flash('success', `Agent ${a.npn} reinstated.`);
   return redirect(ctx.res, `/exchange/agents/${a.npn}`);
 });
@@ -554,18 +567,19 @@ getR('/exchange/notices', ctx => {
   const notices = D.all('SELECT * FROM notices ORDER BY id DESC');
   return ctx.render('FTR Notices', h`<h1 id="page-title">Failure to file and reconcile (FTR)</h1>
     <div class="card"><h2>FTR cases</h2>${table(['Tax filer', 'Application', 'Consecutive FTR years', 'Last FTR tax year', 'Channel', 'APTC status'], cases.map(c => [c.tax_filer_name, c.application_number || '—', c.consecutive_ftr_years, c.last_ftr_tax_year, c.notice_channel, badge(c.aptc_status)]), { id: 'ftr-cases' })}
-      <form method="post" action="/exchange/notices/generate"><div class="actions">${button('Generate FTR Notices')}</div></form></div>
+      <form method="post" action="/exchange/notices/generate">${select({ name: 'planYear', id: 'ftr-plan-year', label: 'Plan year', options: ['2025', '2026', '2027'], value: D.param('coverage_year', '2026') })}<div class="actions">${button('Generate FTR Notices')}</div></form></div>
     <div class="card"><h2>Issued notices</h2>${table(['Notice #', 'Recipient', 'Type', 'Channel', 'Contains FTI', 'Text'], notices.map(n => [n.notice_number, n.recipient, n.notice_type, n.channel, n.contains_fti ? 'Yes' : 'No', n.body]), { id: 'notices-table', empty: 'No notices issued.' })}</div>`, { active: 'notices' });
 });
 postR('/exchange/notices/generate', ctx => {
   let n = 0;
+  const planYear = Number(ctx.body.planYear || D.param('coverage_year', 2026));
   for (const c of D.all('SELECT * FROM ftr_cases')) {
-    const r = R.rules.ftrNotice(c.consecutive_ftr_years, c.notice_channel, c.tax_filer_name);
-    if (!r.required) continue;
-    if (D.get('SELECT 1 x FROM notices WHERE ftr_case_id = ? AND notice_type = ?', c.id, r.type)) continue;
+    const r = BCA.rules.ftrEligibility({ planYear, failedYears: c.consecutive_ftr_years, channel: c.notice_channel, name: c.tax_filer_name });   // 45 CFR 155.305(f)(4) as amended
+    if (!r.notice) continue;
+    if (D.get('SELECT 1 x FROM notices WHERE ftr_case_id = ? AND notice_type = ?', c.id, r.notice)) continue;
     D.insert('notices', { notice_number: D.nextNumber('NTC', 'notices', 'notice_number'), user_id: c.user_id, ftr_case_id: c.id, recipient: c.tax_filer_name,
-      notice_type: r.type, channel: c.notice_channel, contains_fti: r.fti ? 1 : 0, body: r.body, created_at: D.nowIso() });
-    D.run('UPDATE ftr_cases SET aptc_status = ? WHERE id = ?', c.consecutive_ftr_years >= 2 ? 'APTC Ended - Second-Year Notice Issued' : 'Eligible - First-Year Notice Issued', c.id);
+      notice_type: r.notice, channel: c.notice_channel, contains_fti: r.fti ? 1 : 0, body: r.body, created_at: D.nowIso() });
+    D.run('UPDATE ftr_cases SET aptc_status = ? WHERE id = ?', r.aptcEligible ? 'Eligible - First-Year Notice Issued' : `APTC Denied - PY${planYear} (${r.rule})`, c.id);
     n++;
   }
   ctx.flash('success', `${n} FTR notice(s) generated.`);
@@ -577,7 +591,7 @@ getR('/exchange/data-inaccuracy', ctx => {
   const rows = D.all('SELECT d.*, i.name issuer FROM data_inaccuracy_reports d JOIN issuers i ON i.id = d.issuer_id ORDER BY d.id DESC');
   return ctx.render('Data Inaccuracy Reports', h`<h1 id="page-title">Issuer data inaccuracy reports</h1>
     <p class="lead">State Exchanges must review, resolve, and report the resolution to HHS within 60 calendar days of receiving a complete report (45 CFR 155.400(d)(1)).</p>
-    <div class="card">${table(['Report #', 'Issuer', 'State', 'Received', 'Complete on', 'Deadline', 'Status', ''], rows.map(r => [r.report_number, r.issuer, r.state, r.received_on, r.completed_on || '—', r.resolution_deadline || '—', badge(r.status), h`<a href="/exchange/data-inaccuracy/${r.report_number}" id="open-${r.report_number}">Open</a>`]), { id: 'dir-table' })}
+    <div class="card">${table(['Report #', 'Issuer', 'State', 'Received', 'Complete on', 'Deadline', 'Status', ''], rows.map(r => [r.report_number, r.issuer, r.state, r.received_on, r.completed_on || '—', r.resolution_deadline || '—', badge(BCA.rules.dataInaccuracyOverdue(r.resolution_deadline, R.today(), r.submitted_to_hhs_on).overdue ? 'Overdue - Flagged for HHS Review' : r.status), h`<a href="/exchange/data-inaccuracy/${r.report_number}" id="open-${r.report_number}">Open</a>`]), { id: 'dir-table' })}
       <div class="actions">${linkBtn('New Report', '/exchange/data-inaccuracy/new', { cls: 'btn btn-outline' })}</div></div>`, { active: 'data-inaccuracy' });
 });
 getR('/exchange/data-inaccuracy/new', ctx => ctx.render('New Data Inaccuracy Report', h`<h1 id="page-title">New data inaccuracy report</h1>
@@ -601,7 +615,7 @@ getR('/exchange/data-inaccuracy/:num', ctx => {
   if (!r) return ctx.notFound('Report not found.');
   return ctx.render(r.report_number, h`${breadcrumb([['Data Inaccuracy Reports', '/exchange/data-inaccuracy'], [r.report_number]])}<h1 id="page-title">${r.report_number}</h1>
     <div class="card">${dl([['Issuer', r.issuer], ['State', r.state], ['Description', r.description], ['Received', r.received_on], ['Complete', r.complete ? `Yes (${r.completed_on})` : 'No'],
-      ['Resolution deadline', h`<span id="resolution-deadline">${r.resolution_deadline || 'Starts when a complete report is received'}</span>`], ['Status', h`<span id="dir-status">${badge(r.status)}</span>`],
+      ['Resolution deadline', h`<span id="resolution-deadline">${r.resolution_deadline || 'Starts when a complete report is received'}</span>`], ['Status', h`<span id="dir-status">${badge(BCA.rules.dataInaccuracyOverdue(r.resolution_deadline, R.today(), r.submitted_to_hhs_on).overdue ? 'Overdue - Flagged for HHS Review' : r.status)}</span>`],
       ['Resolution', r.resolution || '—'], ['Submitted to HHS', r.submitted_to_hhs_on || '—']], 'dir-details')}</div>
     ${!r.complete ? h`<form method="post" action="/exchange/data-inaccuracy/${r.report_number}/complete" class="card narrow" id="dir-complete-form">
         ${field({ name: 'completedOn', id: 'completed-on', type: 'date', label: 'Complete report received date', value: R.today(), required: true })}
@@ -689,6 +703,14 @@ getR('/exchange/parameters', ctx => ctx.render('Regulatory Parameters', h`<h1 id
     p.description, p.citation || '']), { id: 'parameters-table' })}</div>`, { active: 'parameters' }));
 postR('/exchange/parameters', ctx => {
   const p = D.get('SELECT * FROM reg_parameters WHERE key = ?', ctx.body.key || '');
+  const v = String(ctx.body.value ?? '').trim();
+  const m = p && /^oep_(start|end)_(\d{4})$/.exec(p.key);
+  if (m) {
+    const y = Number(m[2]); const start = m[1] === 'start' ? v : D.param(`oep_start_${y}`, ''); const end = m[1] === 'end' ? v : D.param(`oep_end_${y}`, '');
+    let check; try { check = BCA.rules.validateOep(y, start, end); } catch (e) { check = { valid: false, issues: [e.message] }; }
+    if (!check.valid) { ctx.flash('error', `${p.key} not saved: ${check.issues.join(' ')}`); return redirect(ctx.res, '/exchange/parameters'); }
+  }
+  if (p && p.key === 'income_increase_threshold_pct' && !(Number(v) >= 10)) { ctx.flash('error', 'The reasonable threshold may not be less than 10% (45 CFR 155.320(c)(3)(iii)(D)).'); return redirect(ctx.res, '/exchange/parameters'); }
   if (p) { D.run('UPDATE reg_parameters SET value = ? WHERE key = ?', String(ctx.body.value ?? '').trim(), p.key); D.audit('reg_parameter', p.key, 'Updated', `${p.value} -> ${ctx.body.value}`, actor(ctx.user)); ctx.flash('success', `${p.key} updated.`); }
   return redirect(ctx.res, '/exchange/parameters');
 });

@@ -4,11 +4,15 @@
 const D = require('../db');
 const R = require('../rules');
 const M = require('../marketplace');
+const B = require('../bca');
+const BR = require('./bca');
 const { getR, postR, h, raw, field, select, textarea, button, linkBtn, alertBox, errors, table, dl, badge, redirect } = require('../web');
 const { breadcrumb } = require('../layout');
 
 const YEAR = 2026;
+const COVERAGE_YEARS = [2026, 2027];
 const COVERAGE_START = `${YEAR}-01-01`;
+const startOf = a => `${a.coverage_year || YEAR}-01-01`;
 const money = R.money;
 const requireLogin = (ctx, next) => { if (!ctx.user) { redirect(ctx.res, `/login?next=${encodeURIComponent(ctx.url)}`); return false; } return true; };
 const ownApp = (ctx, num) => D.get('SELECT * FROM applications WHERE app_number = ? AND user_id = ?', num, ctx.user.id);
@@ -192,7 +196,7 @@ getR('/dashboard', ctx => {
   const appeals = D.all('SELECT * FROM appeals WHERE user_id = ? ORDER BY id DESC', ctx.user.id);
   const appLink = a => (a.status === 'In Progress' ? `/apply/${a.app_number}/household` : `/apply/${a.app_number}/results`);
   return ctx.render('My account', h`<h1 id="page-title">Welcome, ${ctx.user.first_name}</h1>
-    <div class="actions">${linkBtn('Start a new application', '/apply', { id: 'btn-dashboard-new-app' })}${linkBtn('File an appeal', '/appeals/new', { cls: 'btn btn-outline', id: 'btn-dashboard-appeal' })}</div>
+    <div class="actions">${linkBtn('Start a new application', '/apply', { id: 'btn-dashboard-new-app' })}${linkBtn('File an appeal', '/appeals/new', { cls: 'btn btn-outline', id: 'btn-dashboard-appeal' })}${linkBtn('Report a life change (SEP)', '/sep/new', { cls: 'btn btn-outline', id: 'btn-dashboard-sep' })}</div>
     <div class="card"><h2>My applications</h2>${table(['Application', 'Year', 'Status', 'APTC / month', ''], apps.map(a => [a.app_number, a.coverage_year, badge(a.status), a.aptc_monthly != null ? money(a.aptc_monthly) : '—', h`<a href="${appLink(a)}" id="open-${a.app_number}">Open</a>`]), { id: 'my-applications', empty: 'You have no applications yet.' })}</div>
     <div class="card"><h2>My plans & programs</h2>${table(['Enrollment', 'Plan', 'Net premium', 'Status', 'Effective', ''], enr.map(e => [e.enrollment_number, e.plan_name, money(e.net_premium), badge(e.status), e.effective_date, h`<a href="/enrollments/${e.enrollment_number}" id="open-${e.enrollment_number}">View / pay</a>`]), { id: 'my-enrollments', empty: 'No enrollments yet.' })}</div>
     <div class="card"><h2>My notices</h2>${table(['Notice', 'Type', 'Date', 'Message'], notices.map(n => [n.notice_number, n.notice_type, n.created_at.slice(0, 10), n.body]), { id: 'my-notices', empty: 'No notices.' })}</div>
@@ -211,7 +215,7 @@ getR('/apply', ctx => {
     ${draft ? alertBox('info', 'You have an application in progress', h`Application ${draft.app_number}. ${linkBtn('Continue application', `/apply/${draft.app_number}/household`, { cls: 'btn btn-small', id: 'btn-continue-application' })}`, 'draft-notice') : ''}
     <form method="post" action="/apply/start" class="card narrow" id="start-application-form">
       ${field({ name: 'zip', id: 'app-zip', label: 'Home ZIP code', required: true, placeholder: '78701' })}
-      ${select({ name: 'coverageYear', id: 'coverage-year', label: 'Coverage year', options: [[String(YEAR), String(YEAR)]] })}
+      ${select({ name: 'coverageYear', id: 'coverage-year', label: 'Coverage year', options: COVERAGE_YEARS.map(String), value: String(YEAR) })}
       <div class="actions">${button('Start application', { id: 'btn-start-application' })}</div></form>`, { active: 'apply' });
 });
 postR('/apply/start', ctx => {
@@ -219,7 +223,8 @@ postR('/apply/start', ctx => {
   const loc = M.lookupZip(ctx.body.zip);
   if (!loc) { ctx.flash('error', 'Enter a ZIP code we serve: 78701, 77002, 79830, 43215, 45651, 72201 or 30303.'); return redirect(ctx.res, '/apply'); }
   const num = D.nextNumber('APP', 'applications', 'app_number');
-  D.insert('applications', { app_number: num, user_id: ctx.user.id, coverage_year: YEAR, zip: loc.zip, county_fips: loc.fips, state: loc.state, status: 'In Progress', created_at: D.nowIso() });
+  const cy = COVERAGE_YEARS.includes(Number(ctx.body.coverageYear)) ? Number(ctx.body.coverageYear) : YEAR;
+  D.insert('applications', { app_number: num, user_id: ctx.user.id, coverage_year: cy, zip: loc.zip, county_fips: loc.fips, state: loc.state, status: 'In Progress', created_at: D.nowIso() });
   D.audit('application', num, 'Started', loc.zip, ctx.user.email);
   return redirect(ctx.res, `/apply/${num}/household`);
 });
@@ -239,6 +244,8 @@ function householdForm(ctx, a, v, errs) {
       ${field({ name: `m${i}_ssn`, id: `member${i + 1}-ssn`, label: 'Social Security number (test data)', placeholder: '000-00-0000', value: v[`m${i}_ssn`] || '' })}
       ${select({ name: `m${i}_applying`, id: `member${i + 1}-applying`, label: 'Needs coverage?', options: [['1', 'Yes'], ['0', 'No']], value: String(val(i, 'applying', '1')) })}
       ${select({ name: `m${i}_tobacco`, id: `member${i + 1}-tobacco`, label: 'Tobacco use', options: [['0', 'No'], ['1', 'Yes']], value: String(val(i, 'tobacco', '0')) })}
+      ${select({ name: `m${i}_immigration_status`, id: `member${i + 1}-immigration-status`, label: 'Citizenship or immigration status', options: B.IMMIGRATION_STATUSES.map(x => [x[0], x[1]]), value: val(i, 'immigration_status', 'citizen') })}
+      ${select({ name: `m${i}_medicaid_ineligible_immigration`, id: `member${i + 1}-medicaid-ineligible`, label: 'Not eligible for Medicaid because of immigration status?', options: [['0', 'No'], ['1', 'Yes']], value: String(val(i, 'medicaid_ineligible_immigration', '0')) })}
     </div></fieldset>`);
   }
   return ctx.render('Household', h`${stepper('household')}<h1 id="page-title">Tell us about your household</h1><p class="muted">Application ${a.app_number} · ZIP ${a.zip}</p>${errors(errs)}
@@ -255,13 +262,15 @@ postR('/apply/:num/household', ctx => {
     if (i > 0 && !fn && !ln && !dob) continue;
     const label = i === 0 ? 'Primary applicant' : `Household member ${i + 1}`;
     if (!fn || !ln) errs.push(`${label}: first and last name are required.`);
-    const age = M.ageOn(dob, COVERAGE_START);
+    const age = M.ageOn(dob, startOf(a));
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || age === null || age < 0 || age > 120) errs.push(`${label}: enter a valid date of birth.`);
     else if (i === 0 && age < 18) errs.push('Primary applicant must be at least 18 years old.');
     const ssn = (b[`m${i}_ssn`] || '').replace(/\D/g, '');
     if (ssn && ssn.length !== 9) errs.push(`${label}: Social Security number must have 9 digits.`);
     if (i > 0 && !b[`m${i}_relationship`]) errs.push(`${label}: select a relationship.`);
-    members.push({ first_name: fn, last_name: ln, dob, sex: b[`m${i}_sex`] || null, relationship: i === 0 ? 'Self' : b[`m${i}_relationship`], applying: b[`m${i}_applying`] === '0' ? 0 : 1, tobacco: b[`m${i}_tobacco`] === '1' ? 1 : 0, ssn_last4: ssn ? ssn.slice(-4) : null });
+    members.push({ first_name: fn, last_name: ln, dob, sex: b[`m${i}_sex`] || null, relationship: i === 0 ? 'Self' : b[`m${i}_relationship`], applying: b[`m${i}_applying`] === '0' ? 0 : 1, tobacco: b[`m${i}_tobacco`] === '1' ? 1 : 0, ssn_last4: ssn ? ssn.slice(-4) : null,
+      immigration_status: B.IMMIGRATION_STATUSES.some(x => x[0] === b[`m${i}_immigration_status`]) ? b[`m${i}_immigration_status`] : 'citizen',
+      medicaid_ineligible_immigration: b[`m${i}_medicaid_ineligible_immigration`] === '1' ? 1 : 0 });
   }
   if (!errs.length && !members.some(m => m.applying)) errs.push('At least one person must need coverage.');
   if (errs.length) return householdForm(ctx, a, b, errs);
@@ -289,7 +298,12 @@ function incomeForm(ctx, a, v, errs) {
   return ctx.render('Income', h`${stepper('income')}<h1 id="page-title">Household income</h1><p class="muted">Application ${a.app_number}</p>${errors(errs)}
     <form method="post" action="/apply/${a.app_number}/income" id="income-form" class="card">
       <div class="field check"><input type="checkbox" name="noIncome" id="no-income" value="1" ${v.noIncome ? raw('checked') : ''}><label for="no-income">No one in my household has income</label></div>
-      ${rows}<div class="actions">${linkBtn('Back', `/apply/${a.app_number}/household`, { cls: 'btn btn-outline', id: 'btn-back' })}${button('Save & continue', { id: 'btn-save-continue' })}</div></form>`, { active: 'apply' });
+      ${rows}
+      <fieldset class="member" id="data-hub"><legend>Data hub results (test data)</legend>
+        <p class="muted">What the Exchange receives from trusted data sources. Leave the tax data blank to simulate "no tax data returned".</p><div class="grid2">
+        ${field({ name: 'taxDataIncome', id: 'tax-data-income', label: 'IRS tax return household income ($)', value: v.taxDataIncome ?? (a.tax_data_income ?? '') })}
+        ${field({ name: 'alternateDataIncome', id: 'alternate-data-income', label: 'Alternate data source income ($)', value: v.alternateDataIncome ?? (a.alternate_data_income ?? '') })}</div></fieldset>
+      <div class="actions">${linkBtn('Back', `/apply/${a.app_number}/household`, { cls: 'btn btn-outline', id: 'btn-back' })}${button('Save & continue', { id: 'btn-save-continue' })}</div></form>`, { active: 'apply' });
 }
 getR('/apply/:num/income', ctx => { if (!requireLogin(ctx)) return; const a = ownApp(ctx, ctx.params.num); if (!a) return ctx.notFound('Application not found.'); return incomeForm(ctx, a, {}, []); });
 postR('/apply/:num/income', ctx => {
@@ -307,7 +321,10 @@ postR('/apply/:num/income', ctx => {
     }
     if (!rows.length && !errs.length) errs.push('Enter at least one income source or check "No one in my household has income".');
   }
+  const dataVal = (k, label) => { const t = String(b[k] ?? '').replace(/[$,\s]/g, ''); if (t === '') return null; const n = Number(t); if (Number.isNaN(n) || n < 0) { errs.push(`${label} must be a dollar amount.`); return null; } return n; };
+  const taxData = dataVal('taxDataIncome', 'IRS tax return income'); const altData = dataVal('alternateDataIncome', 'Alternate data income');
   if (errs.length) return incomeForm(ctx, a, b, errs);
+  D.run('UPDATE applications SET tax_data_income = ?, alternate_data_income = ? WHERE id = ?', taxData, altData, a.id);
   D.run('DELETE FROM income_sources WHERE application_id = ?', a.id);
   rows.forEach(r => D.insert('income_sources', { application_id: a.id, ...r }));
   D.run('UPDATE applications SET annual_income = ? WHERE id = ?', rows.reduce((s, r) => s + r.annual_amount, 0), a.id);
@@ -359,12 +376,25 @@ postR('/apply/:num/submit', ctx => {
   if (b.reviewConfirmed && !b.consentGiven) errs.push('Consent must be given before confirming an agent-assisted review.');
   if ((b.consentGiven || b.reviewConfirmed) && !agent) errs.push('Consent and review confirmation apply only when an agent or broker assisted you.');
   if (errs.length) return reviewPage(ctx, a, b, errs);
-  const ages = members.filter(m => m.applying).map(m => M.ageOn(m.dob, COVERAGE_START));
-  const e = M.eligibility({ zip: a.zip, householdSize: members.length, income: a.annual_income || 0, members: members.map(m => ({ age: M.ageOn(m.dob, COVERAGE_START), applying: !!m.applying })) });
-  D.run(`UPDATE applications SET status = 'Submitted', household_size = ?, fpl_percent = ?, medicaid_eligible = ?, aptc_eligible = ?, aptc_monthly = ?, csr_variant = ?, slcsp_plan_id = ?, slcsp_premium = ?,
-    assisted_by_agent_id = ?, consent_given = ?, consent_review_confirmed = ?, consent_method = ?, signature = ?, submitted_at = ? WHERE id = ?`,
-    members.length, e.fplPercent, e.medicaidEligible ? 1 : 0, e.aptcEligible ? 1 : 0, e.aptcMonthly, e.csrVariant, e.slcsp ? e.slcsp.planId : null, e.slcsp ? e.slcsp.premium : null,
-    agent ? agent.id : null, b.consentGiven ? 1 : 0, b.reviewConfirmed ? 1 : 0, b.consentMethod || null, b.signature.trim(), D.nowIso(), a.id);
+  const ages = members.filter(m => m.applying).map(m => M.ageOn(m.dob, startOf(a)));
+  // 2025 CFR eligibility rules (BCA:2, 4-10): lawful presence, FTR, income verification
+  const ev = BR.evaluateApplication(a, members);
+  const eligibleIds = new Set(ev.eligibleApplying.map(m => m.id));
+  const e = M.eligibility({ zip: a.zip, householdSize: members.length, income: a.annual_income || 0, members: members.map(m => ({ age: M.ageOn(m.dob, startOf(a)), applying: eligibleIds.has(m.id) })) });
+  if (!eligibleIds.size) { e.aptcEligible = false; e.aptcMonthly = 0; e.csrVariant = null; }
+  if (ev.ftrResult && !ev.ftrResult.aptcEligible) { e.aptcEligible = false; e.aptcMonthly = 0; e.csrVariant = null; }
+  const status = eligibleIds.size || e.medicaidEligible ? 'Submitted' : 'Submitted - Not Eligible for QHP';
+  D.run(`UPDATE applications SET status = ?, household_size = ?, fpl_percent = ?, medicaid_eligible = ?, aptc_eligible = ?, aptc_monthly = ?, csr_variant = ?, slcsp_plan_id = ?, slcsp_premium = ?,
+    assisted_by_agent_id = ?, consent_given = ?, consent_review_confirmed = ?, consent_method = ?, signature = ?, submitted_at = ?,
+    verification_path = ?, income_verification = ?, ftr_outcome = ?, eligibility_notes = ? WHERE id = ?`,
+    status, members.length, e.fplPercent, e.medicaidEligible ? 1 : 0, e.aptcEligible ? 1 : 0, e.aptcMonthly, e.csrVariant, e.slcsp ? e.slcsp.planId : null, e.slcsp ? e.slcsp.premium : null,
+    agent ? agent.id : null, b.consentGiven ? 1 : 0, b.reviewConfirmed ? 1 : 0, b.consentMethod || null, b.signature.trim(), D.nowIso(),
+    ev.path, ev.verification, ev.ftrResult ? `${ev.ftrResult.aptcEligible ? 'APTC eligible' : 'APTC denied'} — ${ev.ftrResult.rule}` : null, ev.notes.join('\n') || null, a.id);
+  if (ev.ftrResult && ev.ftrResult.notice) {
+    const ftr = D.get('SELECT * FROM ftr_cases WHERE user_id = ? ORDER BY id DESC', a.user_id);
+    D.insert('notices', { notice_number: D.nextNumber('NTC', 'notices', 'notice_number'), user_id: a.user_id, ftr_case_id: ftr.id, recipient: ftr.tax_filer_name,
+      notice_type: ev.ftrResult.notice, channel: ftr.notice_channel, contains_fti: ev.ftrResult.fti ? 1 : 0, body: ev.ftrResult.body, created_at: D.nowIso() });
+  }
   D.audit('application', a.app_number, 'Submitted', `ages=${ages.join(',')}; aptc=${e.aptcMonthly}`, ctx.user.email);
   return redirect(ctx.res, `/apply/${a.app_number}/results`);
 });
@@ -373,6 +403,10 @@ getR('/apply/:num/results', ctx => {
   const a = ownApp(ctx, ctx.params.num); if (!a) return ctx.notFound('Application not found.');
   if (a.status === 'In Progress') return redirect(ctx.res, `/apply/${a.app_number}/household`);
   const agent = a.assisted_by_agent_id ? D.get('SELECT * FROM agents WHERE id = ?', a.assisted_by_agent_id) : null;
+  const mem = D.all('SELECT * FROM household_members WHERE application_id = ? AND applying = 1 ORDER BY id', a.id);
+  const notLp = mem.filter(m => m.lawfully_present === 0);
+  const lpText = notLp.length ? `Not eligible for QHP enrollment, APTC or CSR: ${notLp.map(m => `${m.first_name} ${m.last_name}`).join(', ')}` : 'All applicants eligible to enroll';
+  const qhpOk = a.status !== 'Submitted - Not Eligible for QHP';
   return ctx.render('Eligibility results', h`${stepper('results')}<h1 id="page-title">Your eligibility results</h1>
     ${alertBox('success', 'Application submitted', h`Application <strong id="application-number">${a.app_number}</strong> was submitted.`, 'application-submitted')}
     <div class="card">${dl([['Household size', a.household_size], ['Household income', money(a.annual_income || 0)], ['Federal poverty level', `${a.fpl_percent}%`],
@@ -381,17 +415,25 @@ getR('/apply/:num/results', ctx => {
       ['Medicaid / CHIP', h`<span id="eligibility-medicaid">${a.medicaid_eligible ? 'Likely eligible — your information will be sent to the State Medicaid agency' : 'Not eligible'}</span>`],
       ['Benchmark plan (SLCSP)', a.slcsp_plan_id ? `${a.slcsp_plan_id} — ${money(a.slcsp_premium)}/month` : '—'],
       ['Assisting agent/broker', agent ? `${agent.first_name} ${agent.last_name} (NPN ${agent.npn})` : 'None'],
-      ['Consent documented', a.consent_given ? `Yes (${a.consent_method || 'method not specified'}); review confirmed: ${a.consent_review_confirmed ? 'Yes' : 'No'}` : 'No']], 'eligibility-details')}
-    <div class="actions">${a.medicaid_eligible ? '' : linkBtn('Continue to plans', `/apply/${a.app_number}/plans`, { id: 'btn-continue-to-plans' })}${linkBtn('Disagree? File an appeal', `/appeals/new?app=${a.app_number}`, { cls: 'btn btn-outline', id: 'btn-file-appeal' })}</div></div>`, { active: 'apply' });
+      ['Consent documented', a.consent_given ? `Yes (${a.consent_method || 'method not specified'}); review confirmed: ${a.consent_review_confirmed ? 'Yes' : 'No'}` : 'No'],
+      ['Coverage year', h`<span id="eligibility-coverage-year">${a.coverage_year}</span>`],
+      ['Lawful presence', h`<span id="eligibility-lawful-presence">${lpText}</span>`],
+      ['Income verification', h`<span id="eligibility-income-verification">${a.income_verification || '—'}</span>`],
+      ['Tax filing (FTR) check', h`<span id="eligibility-ftr">${a.ftr_outcome || 'No failure to file and reconcile reported'}</span>`]], 'eligibility-details')}
+    ${a.eligibility_notes ? alertBox('info', 'Eligibility notes', h`<ul id="eligibility-notes">${a.eligibility_notes.split('\n').map(n => h`<li>${n}</li>`)}</ul>`, 'eligibility-notes-box') : ''}
+    <div class="actions">${a.medicaid_eligible || !qhpOk ? '' : linkBtn('Continue to plans', `/apply/${a.app_number}/plans`, { id: 'btn-continue-to-plans' })}${linkBtn('Disagree? File an appeal', `/appeals/new?app=${a.app_number}`, { cls: 'btn btn-outline', id: 'btn-file-appeal' })}</div></div>`, { active: 'apply' });
 });
 getR('/apply/:num/plans', ctx => {
   if (!requireLogin(ctx)) return;
   const a = ownApp(ctx, ctx.params.num); if (!a) return ctx.notFound('Application not found.');
   if (a.status === 'In Progress') return redirect(ctx.res, `/apply/${a.app_number}/household`);
-  const ages = D.all('SELECT dob FROM household_members WHERE application_id = ? AND applying = 1', a.id).map(m => M.ageOn(m.dob, COVERAGE_START));
-  const plans = M.plansInCounty(a.county_fips).map(p => ({ p, prem: M.householdPremium(p, ages) })).sort((x, y) => x.prem - y.prem);
+  const ages = D.all('SELECT dob FROM household_members WHERE application_id = ? AND applying = 1 AND COALESCE(lawfully_present, 1) = 1', a.id).map(m => M.ageOn(m.dob, startOf(a)));
+  const oep = (() => { try { return B.rules.oepEffectiveDate(a.coverage_year, D.today()); } catch (e) { return null; } })();
+  const plans = M.plansInCounty(a.county_fips, a.coverage_year).map(p => ({ p, prem: M.householdPremium(p, ages) })).sort((x, y) => x.prem - y.prem);
   const aptc = a.aptc_monthly || 0;
   return ctx.render('Choose a plan', h`${stepper('plans')}<h1 id="page-title">Choose a plan</h1><p class="lead">Savings applied: <strong id="applied-aptc">${money(aptc)}/month</strong></p>
+    ${oep ? (oep.inOep ? alertBox('info', `Open Enrollment for ${a.coverage_year}`, h`Open Enrollment runs ${oep.window.start} to ${oep.window.end}. If you enroll today (${D.today()}), coverage starts <strong id="oep-effective-date">${oep.effectiveDate}</strong> (${oep.rule}).`, 'oep-info')
+      : alertBox('warning', 'Open Enrollment is closed', h`${oep.reason} ${linkBtn('Report a life change', `/sep/new?app=${a.app_number}`, { cls: 'btn btn-small', id: 'btn-oep-sep' })}`, 'oep-closed')) : ''}
     ${table(['Plan', 'Metal', 'Premium', 'After savings', 'Deductible', ''], plans.map(({ p, prem }) => [h`<a href="/plans/${p.id}">${p.name}</a>`, p.metal, money(prem), money(Math.max(0, prem - aptc)), money(p.deductible),
       h`<form method="post" action="/apply/${a.app_number}/enroll" class="inline"><input type="hidden" name="planId" value="${p.id}"><button type="submit" class="btn btn-small" id="enroll-${p.id}" data-testid="enroll-${p.id}">Enroll</button></form>`]), { id: 'enroll-plans' })}`, { active: 'apply', wide: true });
 });
@@ -401,12 +443,17 @@ postR('/apply/:num/enroll', ctx => {
   const p = D.get('SELECT p.* FROM plans p JOIN plan_service_areas s ON s.plan_id = p.id WHERE p.id = ? AND s.county_fips = ?', ctx.body.planId || '', a.county_fips);
   if (!p || a.status === 'In Progress') { ctx.flash('error', 'Select a plan available in your area.'); return redirect(ctx.res, `/apply/${a.app_number}/plans`); }
   if (D.get("SELECT 1 x FROM enrollments WHERE application_id = ? AND status NOT LIKE 'Cancelled%'", a.id)) { ctx.flash('warning', 'This application already has an enrollment.'); return redirect(ctx.res, '/dashboard'); }
-  const ages = D.all('SELECT dob FROM household_members WHERE application_id = ? AND applying = 1', a.id).map(m => M.ageOn(m.dob, COVERAGE_START));
+  if (a.status === 'Submitted - Not Eligible for QHP') { ctx.flash('error', 'No one on this application is eligible to enroll in a QHP.'); return redirect(ctx.res, `/apply/${a.app_number}/results`); }
+  // Open enrollment window and effective date (BCA:14-17)
+  let oep;
+  try { oep = B.rules.oepEffectiveDate(a.coverage_year, D.today()); } catch (err) { ctx.flash('error', err.message); return redirect(ctx.res, `/apply/${a.app_number}/plans`); }
+  if (!oep.inOep) { ctx.flash('error', `Open Enrollment is closed. ${oep.reason}`); return redirect(ctx.res, `/apply/${a.app_number}/plans`); }
+  const ages = D.all('SELECT dob FROM household_members WHERE application_id = ? AND applying = 1 AND COALESCE(lawfully_present, 1) = 1', a.id).map(m => M.ageOn(m.dob, startOf(a)));
   const gross = M.householdPremium(p, ages);
   const aptc = Math.min(gross, a.aptc_monthly || 0);
   const num = D.nextNumber('ENR', 'enrollments', 'enrollment_number');
   D.insert('enrollments', { enrollment_number: num, application_id: a.id, user_id: ctx.user.id, plan_id: p.id, gross_premium: gross, aptc_applied: M.r2(aptc), net_premium: M.r2(gross - aptc),
-    status: 'Pending Binder Payment', effective_date: COVERAGE_START, created_at: D.nowIso() });
+    status: 'Pending Binder Payment', effective_date: oep.effectiveDate, created_at: D.nowIso() });
   D.run("UPDATE applications SET status = 'Enrolled' WHERE id = ?", a.id);
   D.audit('enrollment', num, 'Created', p.id, ctx.user.email);
   ctx.flash('success', `You're enrolled in ${p.name}. Pay your first premium to activate coverage.`);
@@ -438,7 +485,7 @@ postR('/enrollments/:num/pay', ctx => {
   const iss = D.get('SELECT i.* FROM plans p JOIN issuers i ON i.id = p.issuer_id WHERE p.id = ?', e.plan_id);
   const type = ctx.body.paymentType === 'ongoing' ? 'ongoing' : 'binder';
   let r;
-  try { r = R.rules.premiumThreshold({ policies: iss.payment_threshold_policy.split(','), paymentType: type, grossPremium: e.gross_premium, aptc: e.aptc_applied, amountPaid: ctx.body.amount }); }
+  try { r = R.rules.premiumThreshold({ policies: iss.payment_threshold_policy.split(','), paymentType: type, grossPremium: e.gross_premium, aptc: e.aptc_applied, amountPaid: ctx.body.amount, planYear: Number(String(e.effective_date || '2026').slice(0, 4)) }); }
   catch (err) { ctx.flash('error', err.message); return redirect(ctx.res, `/enrollments/${e.enrollment_number}`); }
   const result = r.sufficient ? `Paid in full${r.applied[0] !== 'Paid in full' ? ` (${r.applied.join('; ')})` : ''}` : (type === 'binder' ? 'Insufficient — coverage not effectuated' : 'Insufficient — grace period');
   D.insert('premium_payments', { payment_number: D.nextNumber('PAY', 'premium_payments', 'payment_number'), enrollment_id: e.id, payment_type: type, amount_due: r.net, amount_paid: R.num(ctx.body.amount, 'Amount'),

@@ -1,5 +1,6 @@
 'use strict';
 const { h, raw, esc } = require('./web');
+const D = require('./db');
 
 const SITE = 'CoverWell Marketplace';
 
@@ -20,7 +21,7 @@ function page({ title, body, session, user, area = 'consumer', active = '', wide
 <link rel="stylesheet" href="/static/styles.css"></head>
 <body class="area-${area}">
 <a class="skip" href="#main-content">Skip to main content</a>
-<div class="sandbox-banner" id="sandbox-banner">Test environment — fictional data for automated testing. Not a government website.</div>
+<div class="sandbox-banner" id="sandbox-banner">Test environment — fictional data for automated testing. Not a government website. · System date <span id="banner-system-date">${esc(D.today())}</span></div>
 ${nav}
 ${main}
 <footer class="site-footer"><div class="container">
@@ -51,7 +52,7 @@ function consumerHeader(user, active) {
 function exchangeHeader(user) {
   return h`<header class="ex-header"><div class="ex-header-row">
     <a href="/exchange" class="ex-logo" id="ex-logo">Exchange QHP Certification Portal</a>
-    <span class="ex-sub">Plan Management · Plan Year 2026</span>
+    <span class="ex-sub">Plan Management · Plan Year 2026 · <a href="/exchange/clock" id="ex-system-date" class="ex-clock">System date ${D.today()}</a></span>
     <div class="account">${user
       ? h`<span class="who" id="ex-signed-in-user">${user.first_name} ${user.last_name} (${user.role})</span>
          <form method="post" action="/logout?next=/exchange" class="inline"><button id="btn-ex-logout" class="btn btn-small btn-link-light" type="submit">Sign out</button></form>`
@@ -83,6 +84,14 @@ const EX_NAV = [
     ['/exchange/data-inaccuracy', 'Data Inaccuracy Reports', 'data-inaccuracy'],
     ['/exchange/qis-report', 'QIS Public Report', 'qis-report'],
     ['/exchange/enrollments', 'Enrollments & Payments', 'enrollments'],
+  ]],
+  ['Enrollment & Eligibility (2025 CFR)', [
+    ['/exchange/redetermination', 'Annual Redetermination', 'redetermination'],
+    ['/exchange/834', '834 Transactions', '834'],
+    ['/exchange/inconsistencies', 'Inconsistencies', 'inconsistencies'],
+    ['/exchange/sep', 'Special Enrollment', 'sep'],
+    ['/exchange/plan-validation', 'Plan Data Validation', 'plan-validation'],
+    ['/exchange/clock', 'System Clock', 'clock'],
   ]],
   ['Rules & Tools', [
     ['/exchange/tools', 'Regulatory Rule Tools', 'tools'],
